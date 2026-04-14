@@ -1,15 +1,17 @@
+from __future__ import annotations
+
 import logging
 import socket
 
 logger = logging.getLogger(__name__)
 
 
-def find_available_port(host: str = "127.0.0.1", port: int = None) -> int:
+def find_available_port(host: str = "0.0.0.0", port: int | None = None) -> int:
     """
     Find a free port on the host if the port is not provided. If the port is provided, check if it is available.
 
     Args:
-        host: The host to bind to. Default is "127.0.0.1".
+        host: The host to bind to. Default is "0.0.0.0".
         port: The port to bind to. Default is None, which means a free port will be found.
 
     Returns:
