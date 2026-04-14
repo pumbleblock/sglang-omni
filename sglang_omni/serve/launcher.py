@@ -151,7 +151,7 @@ async def _run_server(
     This is the async entry point.  For a blocking call use :func:`launch_server`.
     """
     # 0. Check port availability before loading models
-    port = _find_available_port(host, port)
+    port = find_available_port(host, port)
 
     gpu_ids = set(pipeline_config.gpu_placement.values())
     need_multi_process = len(gpu_ids) > 1
