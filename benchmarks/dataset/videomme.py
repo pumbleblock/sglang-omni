@@ -60,7 +60,7 @@ def _resolve_video_path(snapshot_dir: Path, row: dict, question_id: str) -> str 
             question_id,
         )
         return None
-    absolute_path = (snapshot_dir / str(relative_path)).resolve()
+    absolute_path = snapshot_dir / str(relative_path)
     if not absolute_path.exists():
         logger.warning(
             "Skipping Video-MME sample %s because the video file does not exist at %s",
