@@ -203,10 +203,10 @@ class TestEncoderMemReserveRouting(unittest.TestCase):
     @patch(
         "sglang_omni.models.qwen3_omni.pipeline.stages.create_sglang_thinker_executor"
     )
-    def test_factory_falls_back_to_module_constant_when_reserve_is_none(
+    def test_factory_uses_default_reserve_when_omitted(
         self, create_thinker_executor_mock
     ) -> None:
-        """``encoder_mem_reserve=None`` means the factory reuses ``OMNI_ENCODER_MEM_FRACTION_STATIC_RESERVE`` (0.05)."""
+        """Omitting ``encoder_mem_reserve`` picks up the factory signature default (0.05)."""
         with patch(
             "sglang_omni.engines.ar.sglang_backend.server_args_builder.ServerArgs"
         ) as server_args_mock:
@@ -214,11 +214,11 @@ class TestEncoderMemReserveRouting(unittest.TestCase):
             create_sglang_thinker_executor_from_config(
                 model_path="dummy",
                 thinker_max_seq_len=8192,
-                # encoder_mem_reserve deliberately omitted -> None default.
+                # encoder_mem_reserve deliberately omitted -> default 0.05.
             )
 
         server_args = create_thinker_executor_mock.call_args.kwargs["server_args"]
-        # auto=0.929 minus constant=0.05 => 0.879 after rounding.
+        # auto=0.929 minus default=0.05 => 0.879 after rounding.
         self.assertEqual(server_args.mem_fraction_static, 0.879)
 
     def test_out_of_range_encoder_mem_reserve_rejected_via_apply_overrides(

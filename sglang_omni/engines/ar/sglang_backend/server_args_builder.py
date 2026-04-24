@@ -6,14 +6,6 @@ from typing import Any
 
 from sglang.srt.server_args import ServerArgs
 
-# Note (Ratish, Chenyang):
-# Default GPU-memory fraction reserved outside SGLang's KV-cache pool for
-# co-located vision/audio encoder weights and activations. SGLang's VLM
-# auto-sizing does not trigger for Qwen3-Omni (vision/audio configs are
-# nested under ``thinker_config``), so we subtract this after auto-sizing.
-# User-pinned ``mem_fraction_static`` bypasses this reserve entirely.
-OMNI_ENCODER_MEM_FRACTION_STATIC_RESERVE = 0.05
-
 
 def build_sglang_server_args(
     model_path: str,
