@@ -252,6 +252,19 @@ class TestEncoderMemReserveRouting(unittest.TestCase):
 
         self.assertEqual(dict(thinker_stage.executor.args or {}), original_args)
 
+    def test_encoder_mem_reserve_routes_on_speech_variant(self) -> None:
+        """Speech variant shares ``_route_thinker_executor_args``; pin that."""
+        from sglang_omni.models.qwen3_omni.config import Qwen3OmniSpeechPipelineConfig
+
+        config = Qwen3OmniSpeechPipelineConfig(model_path="dummy")
+        config.apply_server_args_overrides(
+            stage_name="thinker",
+            overrides={"encoder_mem_reserve": 0.20},
+        )
+
+        thinker_stage = next(s for s in config.stages if s.name == "thinker")
+        self.assertEqual(thinker_stage.executor.args["encoder_mem_reserve"], 0.20)
+
 
 class TestEncoderMemReserveBuilderFloor(unittest.TestCase):
     """Builder raises when reserve would drop auto mem_fraction_static below safe floor."""

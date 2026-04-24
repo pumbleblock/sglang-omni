@@ -58,6 +58,10 @@ def build_sglang_server_args(
     return server_args
 
 
+# Minimum ``mem_fraction_static`` SGLang can still boot with on a typical
+# Qwen3-Omni-30B thinker: below this the KV allocator fails deep in the
+# scheduler with a confusing stack trace, so raise early at build time
+# instead. 0.05 was too permissive (SGLang crashes ~0.08 on H200 for 30B).
 _MIN_MEM_FRACTION_STATIC_AFTER_RESERVE = 0.1
 
 
