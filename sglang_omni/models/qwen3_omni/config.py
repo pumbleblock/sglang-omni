@@ -175,8 +175,9 @@ def _route_thinker_executor_args(
     if casted:
         for stage in stages:
             if stage.name == THINKER_STAGE:
-                if stage.executor.args is None:
-                    stage.executor.args = {}
+                # ``ExecutorConfig.args`` has ``default_factory=dict`` in the
+                # pydantic schema, so it is always a dict here — no None guard
+                # needed.
                 stage.executor.args.update(casted)
                 break
     return remaining

@@ -277,7 +277,18 @@ class TestEncoderMemReserveRouting(unittest.TestCase):
         )
 
     def test_thinker_executor_args_atomic_reverse_order(self) -> None:
-        """Reverse mix (valid encoder_mem_reserve + invalid thinker_max_seq_len): same atomicity guarantee holds regardless of which key fails."""
+        """Reverse-order regression guard.
+
+        Under the current ``_THINKER_EXECUTOR_ARG_CASTS`` declaration order,
+        ``thinker_max_seq_len`` is cast before ``encoder_mem_reserve`` so
+        a bad ``thinker_max_seq_len`` aborts before the (already-valid)
+        ``encoder_mem_reserve`` is written. This test does NOT directly
+        repro the pre-fix bug for the reverse-failure case (the forward
+        test does) — it pins the post-fix atomic semantics so that any
+        future reordering of ``_THINKER_EXECUTOR_ARG_CASTS`` (which would
+        flip which key partial-writes under the old implementation) still
+        keeps stage state unchanged on cast failure.
+        """
         config = Qwen3OmniPipelineConfig(model_path="dummy")
         thinker_stage = next(s for s in config.stages if s.name == "thinker")
         original_args = dict(thinker_stage.executor.args or {})
