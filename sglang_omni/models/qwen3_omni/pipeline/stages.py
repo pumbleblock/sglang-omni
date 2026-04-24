@@ -358,16 +358,7 @@ def create_sglang_thinker_executor_from_config(
     server_args_overrides: dict[str, Any] | None = None,
     speech_enabled: bool = False,
 ) -> EngineExecutor:
-    """Create a SGLang thinker executor from JSON-serializable config args.
-
-    This keeps pipeline config args plain dict types while still constructing
-    a typed ServerArgs object internally.
-
-    ``encoder_mem_reserve`` is the GPU-memory fraction kept OUT of SGLang's
-    static pool for the co-located vision/audio encoder. Default 0.05 is
-    tuned for single-request / short-video workloads; raise to 0.15-0.20
-    for high-concurrency long-video or long-audio workloads.
-    """
+    """Create a SGLang thinker executor from JSON-serializable config args."""
     pre_load_avail_mem = avail_gpu_mem(gpu_id)
     overrides = server_args_overrides or {}
     server_args = build_sglang_server_args(
@@ -375,8 +366,6 @@ def create_sglang_thinker_executor_from_config(
         context_length=thinker_max_seq_len,
         **overrides,
     )
-    # Pinning mem_fraction_static bypasses SGLang's auto path, so the
-    # encoder reserve (which subtracts from that auto value) is skipped.
     if "mem_fraction_static" not in overrides:
         apply_encoder_mem_reserve(server_args, encoder_mem_reserve)
     pre_load_mem = (

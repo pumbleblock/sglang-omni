@@ -126,13 +126,7 @@ def _route_thinker_executor_args(
     stage_name: str,
     overrides: dict[str, Any],
 ) -> dict[str, Any]:
-    """Pop thinker-factory kwargs onto the thinker stage; return the rest.
-
-    Casts + validates ``thinker_max_seq_len`` and ``encoder_mem_reserve``
-    into a temporary dict first, so a bad value raises before the stage
-    state is mutated. Remaining keys are returned for forwarding as raw
-    SGLang ``server_args_overrides``.
-    """
+    """Pop thinker-factory kwargs onto the thinker stage; return the rest."""
     remaining = dict(overrides)
     if stage_name != THINKER_STAGE:
         return remaining

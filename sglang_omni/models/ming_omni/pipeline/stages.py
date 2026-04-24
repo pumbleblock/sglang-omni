@@ -340,9 +340,6 @@ def create_sglang_thinker_executor_from_config(
         context_length=thinker_max_seq_len,
         **overrides,
     )
-    # Ming-Omni co-locates vision/audio encoders on the thinker GPU; reserve
-    # 0.05 of GPU memory outside SGLang's static pool for them. Skipped when
-    # the caller pinned mem_fraction_static (no auto value to subtract from).
     if "mem_fraction_static" not in overrides:
         apply_encoder_mem_reserve(server_args, 0.05)
     pre_load_mem = (

@@ -17,13 +17,7 @@ def build_sglang_server_args(
     mem_fraction_static: float | None = None,
     **overrides: Any,
 ) -> ServerArgs:
-    """Build a SGLang ``ServerArgs`` with shared defaults for AR engines.
-
-    Only fields that SGLang's own ``ServerArgs`` accepts are passed through
-    here. Domain-specific adjustments (e.g. carving out GPU memory for a
-    co-located vision/audio encoder) are the caller's responsibility —
-    see ``apply_encoder_mem_reserve``.
-    """
+    """Build a SGLang ServerArgs with shared defaults for AR engines."""
     kwargs: dict[str, Any] = {
         "model_path": model_path,
         "trust_remote_code": True,
@@ -46,13 +40,14 @@ def apply_encoder_mem_reserve(
     server_args: ServerArgs,
     encoder_mem_reserve: float,
 ) -> None:
-    """Subtract ``encoder_mem_reserve`` from SGLang's auto-picked mem_fraction_static.
+    """Subtract encoder_mem_reserve from SGLang's auto-picked mem_fraction_static.
 
-    Call this only when SGLang auto-selected ``mem_fraction_static`` —
-    i.e. the caller did NOT pin ``--mem-fraction-static``. When the caller
-    pinned, that value is the whole budget and the reserve is meaningless.
+    # Note (Chenyang):
+    Call this only when SGLang auto-selected mem_fraction_static —
+    i.e. the caller did NOT pin --mem-fraction-static. When the caller
+    pinned, that value is the whole budget and the reserve value is ignored.
 
-    Raises ``ValueError`` when the result would drop below 0.1 — below
+    Raises ValueError when the result would drop below 0.1 — below
     that, SGLang's KV allocator fails deep in the scheduler with a
     confusing traceback (empirically crashes ~0.08 on H200 for
     Qwen3-Omni-30B), so surface it at build time instead.

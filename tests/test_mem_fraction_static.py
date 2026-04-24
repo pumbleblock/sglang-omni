@@ -174,6 +174,7 @@ class TestEncoderMemReserveRouting(unittest.TestCase):
             )
 
         server_args = create_thinker_executor_mock.call_args.kwargs["server_args"]
+        # Note (Chenyang):
         # auto=0.929 minus reserve=0.20 => 0.729 after rounding.
         self.assertEqual(server_args.mem_fraction_static, 0.729)
 
@@ -183,7 +184,7 @@ class TestEncoderMemReserveRouting(unittest.TestCase):
     def test_factory_uses_default_reserve_when_omitted(
         self, create_thinker_executor_mock
     ) -> None:
-        """Omitting ``encoder_mem_reserve`` picks up the factory signature default (0.05)."""
+        """Omitting encoder_mem_reserve picks up the factory signature default (0.05)."""
         with patch(
             "sglang_omni.engines.ar.sglang_backend.server_args_builder.ServerArgs"
         ) as server_args_mock:
@@ -191,17 +192,17 @@ class TestEncoderMemReserveRouting(unittest.TestCase):
             create_sglang_thinker_executor_from_config(
                 model_path="dummy",
                 thinker_max_seq_len=8192,
-                # encoder_mem_reserve deliberately omitted -> default 0.05.
             )
 
         server_args = create_thinker_executor_mock.call_args.kwargs["server_args"]
+        # Note (Chenyang):
         # auto=0.929 minus default=0.05 => 0.879 after rounding.
         self.assertEqual(server_args.mem_fraction_static, 0.879)
 
     def test_out_of_range_encoder_mem_reserve_rejected_via_apply_overrides(
         self,
     ) -> None:
-        """Out-of-range reserves raise at the config boundary, before launch."""
+        """Out-of-range encoder_mem_reserve raises at the config boundary, before launch."""
         config = Qwen3OmniPipelineConfig(model_path="dummy")
 
         with self.assertRaisesRegex(
@@ -247,6 +248,7 @@ class TestEncoderMemReserveFloor(unittest.TestCase):
     """``apply_encoder_mem_reserve`` raises when reserve would drop mem_fraction_static below the safe floor."""
 
     def test_reserve_dropping_below_floor_raises(self) -> None:
+        # Note (Chenyang):
         # Simulate a tiny auto value (small-memory GPU) + an aggressive
         # reserve. 0.15 - 0.10 = 0.05 < floor 0.1 -> raise.
         server_args = SimpleNamespace(mem_fraction_static=0.15)
