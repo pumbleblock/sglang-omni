@@ -74,12 +74,11 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=None,
         help=(
-            "GPU-memory fraction reserved outside SGLang's KV-cache pool "
-            "for the co-located vision/audio encoder on the thinker GPU. "
-            "Subtracted from SGLang's auto-selected mem_fraction_static; "
-            "ignored when --mem-fraction-static is pinned. Default 0.05 is "
-            "tuned for single-request/short-video workloads; raise to "
-            "0.15-0.20 for high-concurrency long-video workloads."
+            "GPU-memory fraction reserved outside SGLang's reserved memory for model weights and"
+            "KV cache. If mem_fraction_static is not pinned, this is will be subtracted from"
+            "SGLang's auto-selected mem_fraction_static; otherwise, when mem_fraction_static"
+            "is pinned, this is ignored. Default 0.05 is tuned for single-request/short-video workloads;"
+            "raise to 0.15-0.20 for high-concurrency workloads for long video and audio."
         ),
     )
 
@@ -100,7 +99,7 @@ def _check_mem_flag_mutex(
     mem_fraction_static: float | None,
     encoder_mem_reserve: float | None,
 ) -> None:
-    """Reject both-flags-set; a pinned ``mem_fraction_static`` bypasses the auto path the reserve subtracts from."""
+    """Pinned mem_fraction_static bypasses the auto path the reserve subtracts from."""
     if mem_fraction_static is not None and encoder_mem_reserve is not None:
         raise ValueError(
             "--mem-fraction-static and --encoder-mem-reserve are mutually "

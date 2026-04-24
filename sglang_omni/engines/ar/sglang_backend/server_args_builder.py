@@ -6,6 +6,7 @@ from typing import Any
 
 from sglang.srt.server_args import ServerArgs
 
+# Note (Ratish, Chenyang):
 # Default GPU-memory fraction reserved outside SGLang's KV-cache pool for
 # co-located vision/audio encoder weights and activations. SGLang's VLM
 # auto-sizing does not trigger for Qwen3-Omni (vision/audio configs are
