@@ -74,11 +74,16 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=None,
         help=(
-            "GPU-memory fraction reserved outside SGLang's reserved memory for model weights and"
-            "KV cache. If mem_fraction_static is not pinned, this is will be subtracted from"
-            "SGLang's auto-selected mem_fraction_static; otherwise, when mem_fraction_static"
-            "is pinned, this is ignored. Default 0.05 is tuned for single-request/short-video workloads;"
-            "raise to 0.15-0.20 for high-concurrency workloads for long video and audio."
+            "GPU-memory fraction kept OUT of SGLang's static pool (which "
+            "holds model weights + KV cache) and left free for the "
+            "co-located vision/audio encoder's weights and activations on "
+            "the thinker GPU. Applied only when --mem-fraction-static is "
+            "NOT pinned: the reserve is subtracted from SGLang's "
+            "auto-selected mem_fraction_static. When --mem-fraction-static "
+            "is pinned, this flag is rejected as mutually exclusive. "
+            "Default 0.05 is tuned for single-request / short-video "
+            "workloads; raise to 0.15-0.20 for high-concurrency long-video "
+            "or long-audio workloads."
         ),
     )
 
@@ -99,12 +104,19 @@ def _check_mem_flag_mutex(
     mem_fraction_static: float | None,
     encoder_mem_reserve: float | None,
 ) -> None:
-    """Pinned mem_fraction_static bypasses the auto path the reserve subtracts from."""
+    """Reject passing both ``--mem-fraction-static`` and ``--encoder-mem-reserve``.
+
+    The reserve only applies when SGLang's auto-sizing runs. A pinned
+    ``--mem-fraction-static`` disables that auto-sizing, so adding
+    ``--encoder-mem-reserve`` on top has no effect — silently ignoring it
+    would confuse users who think both are taking effect.
+    """
     if mem_fraction_static is not None and encoder_mem_reserve is not None:
         raise ValueError(
             "--mem-fraction-static and --encoder-mem-reserve are mutually "
-            "exclusive: a pinned --mem-fraction-static bypasses the auto "
-            "path the reserve subtracts from. Pass only one."
+            "exclusive: --mem-fraction-static pins the pool size directly "
+            "and the reserve only subtracts from SGLang's auto-selected "
+            "value. Pass only one."
         )
 
 
