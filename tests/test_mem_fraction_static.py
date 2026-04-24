@@ -107,7 +107,7 @@ class TestMemFractionStaticOverrides(unittest.TestCase):
             config.apply_server_args_overrides(stage_name="nope", overrides={})
 
     def test_apply_encoder_mem_reserve_subtracts(self) -> None:
-        """Helper subtracts the reserve from the server_args' auto mem_fraction_static in-place."""
+        """apply_encoder_mem_reserve subtracts the reserve from the server_args' auto mem_fraction_static in-place."""
         server_args = SimpleNamespace(mem_fraction_static=0.929)
 
         apply_encoder_mem_reserve(server_args, 0.05)
@@ -123,7 +123,7 @@ class TestMemFractionStaticOverrides(unittest.TestCase):
         self.assertEqual(server_args.mem_fraction_static, 0.929)
 
     def test_build_sglang_server_args_no_longer_takes_reserve_kwarg(self) -> None:
-        """``build_sglang_server_args`` is now pure ServerArgs construction; reserve lives in ``apply_encoder_mem_reserve``."""
+        """build_sglang_server_args is now pure ServerArgs construction; reserve lives in apply_encoder_mem_reserve."""
         import inspect
 
         sig = inspect.signature(build_sglang_server_args)
@@ -135,7 +135,7 @@ class TestEncoderMemReserveRouting(unittest.TestCase):
     """Round-trip + fallback + validation coverage for ``--encoder-mem-reserve``."""
 
     def test_encoder_mem_reserve_round_trips_to_thinker_stage_args(self) -> None:
-        """``apply_server_args_overrides`` routes ``encoder_mem_reserve`` to the thinker stage args, not ``server_args_overrides``."""
+        """apply_server_args_overrides routes encoder_mem_reserve to the thinker stage args, not server_args_overrides."""
         config = Qwen3OmniPipelineConfig(model_path="dummy")
 
         config.apply_server_args_overrides(
@@ -156,7 +156,7 @@ class TestEncoderMemReserveRouting(unittest.TestCase):
     def test_encoder_mem_reserve_reaches_thinker_factory(
         self, create_thinker_executor_mock
     ) -> None:
-        """The routed ``encoder_mem_reserve`` reaches the factory and is applied to ``server_args.mem_fraction_static``."""
+        """The routed encoder_mem_reserve reaches the factory and is applied to server_args.mem_fraction_static."""
         config = Qwen3OmniPipelineConfig(model_path="dummy")
         config.apply_server_args_overrides(
             stage_name="thinker",
@@ -231,7 +231,7 @@ class TestEncoderMemReserveRouting(unittest.TestCase):
         self.assertEqual(dict(thinker_stage.executor.args or {}), original_args)
 
     def test_encoder_mem_reserve_routes_on_speech_variant(self) -> None:
-        """Speech variant shares ``_route_thinker_executor_args``; pin that."""
+        """Speech variant shares _route_thinker_executor_args and pins that."""
         from sglang_omni.models.qwen3_omni.config import Qwen3OmniSpeechPipelineConfig
 
         config = Qwen3OmniSpeechPipelineConfig(model_path="dummy")

@@ -146,9 +146,6 @@ def _install_qwen3_stages_stubs(monkeypatch) -> None:
 
 def _import_qwen3_stages_for_test(monkeypatch):
     module_name = "sglang_omni.models.qwen3_omni.pipeline.stages"
-    # Register the current (real) stages module for restoration on teardown.
-    # Without this, the re-import below leaves a stub-bound stages module in
-    # sys.modules and later tests that import from it get the polluted copy.
     original = sys.modules.get(module_name)
     if original is not None:
         monkeypatch.setitem(sys.modules, module_name, original)
