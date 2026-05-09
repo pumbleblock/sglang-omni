@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Any
+from typing import Any, Literal
 
 import torch
 import torch.nn.functional as F
@@ -706,7 +706,38 @@ def create_image_encoder_executor(
     *,
     device: str = "cuda",
     dtype: str | None = None,
+    # Encoder TP knobs — see sglang-project/sglang-omni#375.
+    # Signature default stays "local" forever (the launcher's
+    # _resolve_factory_args reads only factory_args / runtime_overrides
+    # for the backend decision). Set ``backend="sglang"`` in
+    # StageConfig.factory_args to use the SGLang-native worker.
+    backend: Literal["local", "sglang"] = "local",
+    tp_rank: int = 0,
+    tp_size: int = 1,
+    nccl_port: int | None = None,
+    load_format: str | None = None,
+    server_args_overrides: dict[str, Any] | None = None,
 ):
+    if backend == "sglang":
+        return _create_sglang_image_encoder_executor(
+            model_path=model_path,
+            tp_rank=tp_rank,
+            tp_size=tp_size,
+            nccl_port=nccl_port,
+            dtype=dtype,
+            load_format=load_format,
+            server_args_overrides=server_args_overrides,
+        )
+    if backend != "local":
+        raise ValueError(
+            f"create_image_encoder_executor: unknown backend={backend!r} "
+            f"(expected 'local' or 'sglang')"
+        )
+    if tp_size != 1:
+        raise ValueError(
+            f"backend='local' does not support TP — got tp_size={tp_size}. "
+            f"Use backend='sglang' for tp_size > 1."
+        )
     from sglang_omni_v1.scheduling.simple_scheduler import SimpleScheduler
 
     model = Qwen3OmniImageEncoder(model_path=model_path, device=device, dtype=dtype)
@@ -745,12 +776,86 @@ def create_image_encoder_executor(
     )
 
 
+def _create_sglang_image_encoder_executor(
+    *,
+    model_path: str,
+    tp_rank: int,
+    tp_size: int,
+    nccl_port: int | None,
+    dtype: str | None,
+    load_format: str | None,
+    server_args_overrides: dict[str, Any] | None,
+):
+    """Build the SGLang-backed image encoder scheduler.
+
+    Imports are deferred so the local lane (which most existing
+    deployments still use) does not pay the SGLang init cost just to
+    build a SimpleScheduler.
+    """
+    from sglang_omni_v1.model_runner.sglang_encoder_worker import SGLangEncoderWorker
+    from sglang_omni_v1.models.qwen3_omni.components.common import load_thinker_config
+    from sglang_omni_v1.models.qwen3_omni.encoder_adapters import (
+        QWEN3_IMAGE_ENCODER_BATCH_BUDGET_BYTES,
+        Qwen3OmniImageEncoderAdapter,
+    )
+    from sglang_omni_v1.scheduling.encoder_scheduler import EncoderScheduler
+
+    worker = SGLangEncoderWorker(
+        model_path=model_path,
+        tp_rank=tp_rank,
+        tp_size=tp_size,
+        nccl_port=nccl_port,
+        dtype=dtype,
+        load_format=load_format,
+        server_args_overrides=server_args_overrides,
+    )
+    thinker_config = load_thinker_config(model_path)
+    adapter = Qwen3OmniImageEncoderAdapter(
+        thinker_config=thinker_config,
+        dtype=worker.model_config.dtype,
+    )
+    return EncoderScheduler(
+        worker=worker,
+        adapter=adapter,
+        max_batch_size=32,
+        max_batch_wait_ms=50,
+        request_cost_fn=adapter.request_cost_fn,
+        max_batch_cost=QWEN3_IMAGE_ENCODER_BATCH_BUDGET_BYTES,
+    )
+
+
 def create_audio_encoder_executor(
     model_path: str,
     *,
     device: str = "cuda",
     dtype: str | None = None,
+    backend: Literal["local", "sglang"] = "local",
+    tp_rank: int = 0,
+    tp_size: int = 1,
+    nccl_port: int | None = None,
+    load_format: str | None = None,
+    server_args_overrides: dict[str, Any] | None = None,
 ):
+    if backend == "sglang":
+        return _create_sglang_audio_encoder_executor(
+            model_path=model_path,
+            tp_rank=tp_rank,
+            tp_size=tp_size,
+            nccl_port=nccl_port,
+            dtype=dtype,
+            load_format=load_format,
+            server_args_overrides=server_args_overrides,
+        )
+    if backend != "local":
+        raise ValueError(
+            f"create_audio_encoder_executor: unknown backend={backend!r} "
+            f"(expected 'local' or 'sglang')"
+        )
+    if tp_size != 1:
+        raise ValueError(
+            f"backend='local' does not support TP — got tp_size={tp_size}. "
+            f"Use backend='sglang' for tp_size > 1."
+        )
     from sglang_omni_v1.scheduling.simple_scheduler import SimpleScheduler
 
     model = Qwen3OmniAudioEncoder(model_path=model_path, device=device, dtype=dtype)
@@ -780,6 +885,44 @@ def create_audio_encoder_executor(
         batch_compute_fn=_encode_batch,
         max_batch_size=32,
         max_batch_wait_ms=50,
+    )
+
+
+def _create_sglang_audio_encoder_executor(
+    *,
+    model_path: str,
+    tp_rank: int,
+    tp_size: int,
+    nccl_port: int | None,
+    dtype: str | None,
+    load_format: str | None,
+    server_args_overrides: dict[str, Any] | None,
+):
+    from sglang_omni_v1.model_runner.sglang_encoder_worker import SGLangEncoderWorker
+    from sglang_omni_v1.models.qwen3_omni.components.common import load_thinker_config
+    from sglang_omni_v1.models.qwen3_omni.encoder_adapters import (
+        Qwen3OmniAudioEncoderAdapter,
+    )
+    from sglang_omni_v1.scheduling.encoder_scheduler import EncoderScheduler
+
+    worker = SGLangEncoderWorker(
+        model_path=model_path,
+        tp_rank=tp_rank,
+        tp_size=tp_size,
+        nccl_port=nccl_port,
+        dtype=dtype,
+        load_format=load_format,
+        server_args_overrides=server_args_overrides,
+    )
+    thinker_config = load_thinker_config(model_path)
+    adapter = Qwen3OmniAudioEncoderAdapter(thinker_config=thinker_config)
+    return EncoderScheduler(
+        worker=worker,
+        adapter=adapter,
+        max_batch_size=32,
+        max_batch_wait_ms=50,
+        request_cost_fn=adapter.request_cost_fn,
+        max_batch_cost=None,
     )
 
 
