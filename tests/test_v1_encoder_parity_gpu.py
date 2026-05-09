@@ -53,7 +53,14 @@ def _run_subprocess(
     extra_env: dict[str, str] | None = None,
     timeout_s: float = 600.0,
 ) -> None:
-    """Run a parity-helper script and fail the test on non-zero exit."""
+    """Run a parity-helper script and fail the test on non-zero exit.
+
+    Streams the child's stdout/stderr line-by-line instead of using
+    ``subprocess.run(capture_output=True)``: under pytest's capture
+    settings the latter can deadlock the child during heavy NCCL init
+    output (observed on Qwen3-Omni audio-tower bring-up), even though
+    the same command runs cleanly outside pytest.
+    """
     env = os.environ.copy()
     env["PYTHONPATH"] = str(_REPO_ROOT)
     env["MODEL_PATH"] = QWEN3_OMNI_MODEL
@@ -67,18 +74,31 @@ def _run_subprocess(
     env.setdefault("NCCL_P2P_DISABLE", "1")
     env.update(extra_env or {})
 
-    proc = subprocess.run(
-        [sys.executable, str(script)],
+    proc = subprocess.Popen(
+        [sys.executable, "-u", str(script)],
         env=env,
-        capture_output=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
         text=True,
-        timeout=timeout_s,
+        bufsize=1,
     )
+    captured: list[str] = []
+    try:
+        for line in proc.stdout:  # type: ignore[union-attr]
+            captured.append(line)
+        proc.wait(timeout=timeout_s)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
+        pytest.fail(
+            f"subprocess {script.name} exceeded {timeout_s}s\n"
+            f"--- output ---\n{''.join(captured)}"
+        )
+
     if proc.returncode != 0:
         pytest.fail(
             f"subprocess {script.name} exited {proc.returncode}\n"
-            f"--- stdout ---\n{proc.stdout}\n"
-            f"--- stderr ---\n{proc.stderr}"
+            f"--- output ---\n{''.join(captured)}"
         )
 
 
