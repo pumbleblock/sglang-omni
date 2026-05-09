@@ -32,6 +32,9 @@ def build_encoder_executor(
     device: str | torch.device = "cuda",
     dtype: torch.dtype | None = None,
     tp_size: int = 1,
+    tp_rank: int = 0,
+    gpu_id: int | None = None,
+    nccl_port: int | None = None,
     max_batch_size: int = 32,
     use_cache: bool = False,
     cache_size: int | None = None,
@@ -78,12 +81,16 @@ def build_encoder_executor(
         device=device,
         dtype=dtype,
         tp_size=tp_size,
+        tp_rank=tp_rank,
     )
 
     scheduler = EncoderScheduler(
         backend=backend,
         device=device,
         tp_size=tp_size,
+        tp_rank=tp_rank,
+        gpu_id=gpu_id,
+        nccl_port=nccl_port,
         max_batch_size=max_batch_size,
         use_cache=use_cache,
         cache_size=cache_size,
@@ -109,6 +116,7 @@ def _select_backend(
     device: str | torch.device,
     dtype: torch.dtype | None,
     tp_size: int,
+    tp_rank: int,
 ) -> EncoderBackend:
     if tp_size <= 1:
         module = local_module_factory()
@@ -128,4 +136,5 @@ def _select_backend(
         device=device,
         dtype=dtype,
         tp_size=tp_size,
+        tp_rank=tp_rank,
     )

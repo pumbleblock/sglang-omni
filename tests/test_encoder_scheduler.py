@@ -40,6 +40,16 @@ def test_tp_size_gt_one_explicitly_unsupported() -> None:
         )
 
 
+def test_tp_rank_must_be_in_range() -> None:
+    with pytest.raises(ValueError, match="tp_rank must"):
+        EncoderScheduler(
+            backend=LocalEncoderBackend(_IdentityEncoder()),
+            device="cpu",
+            tp_size=1,
+            tp_rank=1,
+        )
+
+
 def test_backend_must_be_nn_module() -> None:
     class NotAModule:
         pass

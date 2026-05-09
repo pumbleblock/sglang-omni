@@ -67,6 +67,9 @@ class EncoderScheduler(Engine):
         backend: EncoderBackend,
         device: str | torch.device = "cuda",
         tp_size: int = 1,
+        tp_rank: int = 0,
+        gpu_id: int | None = None,
+        nccl_port: int | None = None,
         max_batch_size: int = 32,
         use_cache: bool = False,
         cache_size: int | None = None,
@@ -83,11 +86,21 @@ class EncoderScheduler(Engine):
         self._backend = backend
         self._device = torch.device(device)
         self._tp_size = int(tp_size)
+        self._tp_rank = int(tp_rank)
+        self._gpu_id = int(gpu_id) if gpu_id is not None else self._device.index
+        self._nccl_port = int(nccl_port) if nccl_port is not None else None
         if self._tp_size < 1:
             raise ValueError(f"tp_size must be >= 1, got {tp_size}")
+        if self._tp_rank < 0 or self._tp_rank >= self._tp_size:
+            raise ValueError(
+                f"tp_rank must satisfy 0 <= tp_rank < tp_size, "
+                f"got tp_rank={tp_rank} tp_size={tp_size}"
+            )
         if self._tp_size > 1:
             # Track #375 — leader/follower forward broadcast is the next
             # PR. Failing fast here avoids silent rank-divergence bugs.
+            # The TP-related ctor args are accepted now so callers (and
+            # the next PR) don't need to change the public surface again.
             raise NotImplementedError(
                 "EncoderScheduler tp_size>1 forward coordination is not "
                 "implemented yet — track sglang-project/sglang-omni#375. "
@@ -126,6 +139,11 @@ class EncoderScheduler(Engine):
             return
         self._ensure_tp_initialized()
         if isinstance(self._backend, SGLangEncoderBackend):
+            # NOTE (#375 follow-up): SGLangEncoderBackend.load currently
+            # uses the generic load_module() helper. Some sglang main
+            # encoder modules expose custom weight_loader hooks (e.g. for
+            # fused QKV under TP) that this generic path may bypass.
+            # Verify that contract before enabling tp_size>1.
             self._backend.load()
         await self._engine.start()
         self._started = True

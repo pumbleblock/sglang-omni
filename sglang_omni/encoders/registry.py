@@ -5,10 +5,10 @@ Each entry pairs an :class:`EncoderAdapter` factory with the optional
 :class:`SGLangEncoderSpec` describing how to load the encoder via sglang
 main when ``tp_size > 1`` is requested.
 
-A model registers its encoders at import time (see
-``sglang_omni/encoders/qwen3_omni.py``); pipeline factories then look the
-encoder up by name without any model-specific imports leaking into
-generic code.
+A model registers its encoders at import time alongside the rest of the
+model package (see ``sglang_omni/models/qwen3_omni/encoder_adapter.py``);
+pipeline factories then look the encoder up by name without any
+model-specific imports leaking into generic code.
 """
 
 from __future__ import annotations

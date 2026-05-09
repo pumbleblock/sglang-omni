@@ -105,25 +105,27 @@ def _build_image_adapter(stage_name: str) -> EncoderAdapter:
     return Qwen3OmniEncoderAdapter(stage_name=stage_name)
 
 
+# Module-level singletons so ``register()`` is genuinely idempotent —
+# ``register_encoder`` accepts a duplicate iff it's the same object.
+_AUDIO_ENCODER_SPEC = EncoderSpec(
+    name=QWEN3_OMNI_AUDIO_ENCODER,
+    adapter_factory=_build_audio_adapter,
+    sglang_spec=_AUDIO_SGLANG_SPEC,
+)
+_IMAGE_ENCODER_SPEC = EncoderSpec(
+    name=QWEN3_OMNI_IMAGE_ENCODER,
+    adapter_factory=_build_image_adapter,
+    sglang_spec=_VISION_SGLANG_SPEC,
+)
+
+
 def register() -> None:
     """Register Qwen3-Omni encoders.
 
     Idempotent — safe to call from multiple import sites.
     """
-    register_encoder(
-        EncoderSpec(
-            name=QWEN3_OMNI_AUDIO_ENCODER,
-            adapter_factory=_build_audio_adapter,
-            sglang_spec=_AUDIO_SGLANG_SPEC,
-        )
-    )
-    register_encoder(
-        EncoderSpec(
-            name=QWEN3_OMNI_IMAGE_ENCODER,
-            adapter_factory=_build_image_adapter,
-            sglang_spec=_VISION_SGLANG_SPEC,
-        )
-    )
+    register_encoder(_AUDIO_ENCODER_SPEC)
+    register_encoder(_IMAGE_ENCODER_SPEC)
 
 
 # Register at import time so the adapter package can be used purely via

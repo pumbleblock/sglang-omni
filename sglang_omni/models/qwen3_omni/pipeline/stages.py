@@ -89,6 +89,23 @@ def create_aggregate_executor() -> PreprocessingExecutor:
     return PreprocessingExecutor(_identity)
 
 
+def _reject_unsupported_tp_size(stage: str, tp_size: int) -> None:
+    """Stop tp_size>1 paths early, before any local tower is loaded.
+
+    The :class:`EncoderScheduler` raises NotImplementedError for the same
+    reason during construction; rejecting here avoids paying the cost of
+    loading the local HF tower on the way to that error and keeps the
+    "single source of truth" message tied to issue #375.
+    """
+    if tp_size > 1:
+        raise NotImplementedError(
+            f"Qwen3-Omni {stage} encoder TP (tp_size={tp_size}) is not "
+            "yet supported — the EncoderScheduler scaffold is in place "
+            "but the leader/follower forward path is the next PR. "
+            "Track sglang-project/sglang-omni#375."
+        )
+
+
 def create_image_encoder_executor(
     model_path: str,
     *,
@@ -98,6 +115,7 @@ def create_image_encoder_executor(
     max_batch_cost: int = QWEN3_IMAGE_ENCODER_BATCH_BUDGET_BYTES,
     tp_size: int = 1,
 ) -> EngineExecutor:
+    _reject_unsupported_tp_size("image", tp_size)
     # Construct the local module eagerly so request_cost_fn can introspect
     # it; the lambda below hands the same instance to LocalEncoderBackend.
     local_model = Qwen3OmniImageEncoder(
@@ -129,6 +147,7 @@ def create_audio_encoder_executor(
     max_batch_size: int = 32,
     tp_size: int = 1,
 ) -> EngineExecutor:
+    _reject_unsupported_tp_size("audio", tp_size)
     return build_encoder_executor(
         QWEN3_OMNI_AUDIO_ENCODER,
         stage_name=AUDIO_STAGE,
