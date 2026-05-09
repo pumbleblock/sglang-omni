@@ -10,6 +10,7 @@ Architecture
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 import multiprocessing
 import socket
@@ -25,8 +26,24 @@ from sglang_omni_v1.config.schema import PipelineConfig, StageConfig
 from sglang_omni_v1.pipeline import Coordinator
 from sglang_omni_v1.pipeline.stage_group import StageGroup
 from sglang_omni_v1.pipeline.stage_process import StageProcessSpec
+from sglang_omni_v1.utils import import_string
 
 logger = logging.getLogger(__name__)
+
+
+# Backends that require an SGLang-managed encoder worker. ``"auto"`` is
+# included because it can resolve to ``"sglang"`` at runtime; the
+# launcher conservatively treats it the same as ``"sglang"`` so the
+# per-process CUDA isolation fires either way.
+_SGLANG_ENCODER_BACKENDS: frozenset[str] = frozenset({"sglang", "auto"})
+
+# Kwargs the runner is about to inject into TP factory args. Layer 1 of
+# the TP preflight rejects any tp_size>1 stage whose factory does not
+# accept these — without the check, mp_runner would silently ship them
+# through ``**spec.factory_args`` and the child would fail at factory
+# argument-binding (or worse, swallow them via ``**kwargs`` and run
+# without TP wiring).
+_TP_LAUNCH_PARAMS = frozenset({"tp_rank", "tp_size", "nccl_port"})
 
 
 def _build_stage_groups(
@@ -72,6 +89,14 @@ def _build_stage_groups(
         # Pre-resolve factory args (inject model_path, gpu_id)
         base_factory_args = _resolve_factory_args(stage_cfg, config)
 
+        # Encoder TP preflight: catch mis-configurations in the main
+        # process before any subprocess is spawned. See #375 design
+        # ("Required launcher change", rule 6) for the failure modes.
+        _run_tp_preflight(stage_cfg, base_factory_args)
+
+        backend = base_factory_args.get("backend", "local")
+        single_visible_device = backend in _SGLANG_ENCODER_BACKENDS
+
         stage_kwargs = dict(
             stage_name=stage_cfg.name,
             factory=stage_cfg.factory,
@@ -100,6 +125,7 @@ def _build_stage_groups(
                     recv_endpoint=stage_endpoints[stage_cfg.name],
                     base_factory_args=base_factory_args,
                     stage_kwargs=stage_kwargs,
+                    single_visible_device=single_visible_device,
                 )
             ]
         else:
@@ -112,6 +138,7 @@ def _build_stage_groups(
                 recv_endpoint=stage_endpoints[stage_cfg.name],
                 base_factory_args=base_factory_args,
                 stage_kwargs=stage_kwargs,
+                single_visible_device=single_visible_device,
             )
 
         groups.append(StageGroup(stage_cfg.name, specs))
@@ -143,6 +170,7 @@ def _build_single_stage_spec(
     recv_endpoint: str,
     base_factory_args: dict[str, Any],
     stage_kwargs: dict[str, Any],
+    single_visible_device: bool = False,
 ) -> StageProcessSpec:
     factory_args = dict(base_factory_args)
     if "gpu_id" in base_factory_args:
@@ -154,6 +182,7 @@ def _build_single_stage_spec(
         tp_size=1,
         gpu_id=gpu_id,
         nccl_port=None,
+        single_visible_device=single_visible_device,
         factory_args=factory_args,
         relay_config=relay_config,
         recv_endpoint=recv_endpoint,
@@ -171,6 +200,7 @@ def _build_tp_stage_specs(
     recv_endpoint: str,
     base_factory_args: dict[str, Any],
     stage_kwargs: dict[str, Any],
+    single_visible_device: bool = False,
 ) -> list[StageProcessSpec]:
     follower_work_queues = [ctx.Queue() for _ in range(stage_cfg.tp_size - 1)]
     follower_abort_queues = [ctx.Queue() for _ in range(stage_cfg.tp_size - 1)]
@@ -195,6 +225,7 @@ def _build_tp_stage_specs(
                     tp_size=stage_cfg.tp_size,
                     gpu_id=gpu_id,
                     nccl_port=nccl_port,
+                    single_visible_device=single_visible_device,
                     factory_args=factory_args,
                     relay_config=relay_config,
                     recv_endpoint=recv_endpoint,
@@ -213,6 +244,7 @@ def _build_tp_stage_specs(
                 tp_size=stage_cfg.tp_size,
                 gpu_id=gpu_id,
                 nccl_port=nccl_port,
+                single_visible_device=single_visible_device,
                 factory_args=factory_args,
                 relay_config=relay_config,
                 recv_endpoint="",
@@ -223,6 +255,55 @@ def _build_tp_stage_specs(
         )
 
     return specs
+
+
+def _run_tp_preflight(
+    stage_cfg: StageConfig,
+    base_factory_args: dict[str, Any],
+) -> None:
+    """Two-layer guard against TP mis-configuration.
+
+    See sglang-project/sglang-omni#375 (encoder TP design,
+    "Required launcher change", rule 6).
+
+    Layer 1 — every ``tp_size > 1`` factory must accept the per-rank
+    kwargs the runner is about to inject. Without this, factories
+    that take ``**kwargs`` would silently swallow the kwargs and run
+    without TP wiring; factories that don't would raise an opaque
+    ``TypeError`` inside the spawned child.
+
+    Layer 2 — encoder factories that expose a ``backend`` parameter
+    only implement TP via the ``"sglang"`` backend. A ``tp_size > 1``
+    config with ``backend != "sglang"`` would otherwise spawn N
+    subprocesses each running an isolated local forward, with all
+    ranks but rank 0's output discarded.
+    """
+    if stage_cfg.tp_size <= 1:
+        return
+
+    factory = import_string(stage_cfg.factory)
+    params = inspect.signature(factory).parameters
+
+    missing = sorted(_TP_LAUNCH_PARAMS - params.keys())
+    if missing:
+        raise ValueError(
+            f"Stage {stage_cfg.name!r}: tp_size={stage_cfg.tp_size} > 1 "
+            f"but factory {stage_cfg.factory!r} does not accept TP "
+            f"launch parameters {missing}. This factory is not "
+            f"TP-capable; reduce tp_size to 1 or use a factory that "
+            f"accepts tp_rank / tp_size / nccl_port."
+        )
+
+    if "backend" in params:
+        backend = base_factory_args.get("backend", "local")
+        if backend != "sglang":
+            raise ValueError(
+                f"Stage {stage_cfg.name!r}: tp_size={stage_cfg.tp_size} "
+                f"requires backend='sglang' (got {backend!r}). The "
+                f"local encoder path does not implement TP — it would "
+                f"silently spawn TP-rank processes that each run a "
+                f"full local forward, with all but rank 0 discarded."
+            )
 
 
 def _resolve_relay_config(
@@ -333,10 +414,24 @@ class MultiProcessPipelineRunner:
         while self._started:
             for group in self._groups:
                 if group.any_dead():
+                    summary = group.dead_summary()
                     logger.error(
                         "Dead stage process(es) detected: %s",
-                        group.dead_summary(),
+                        summary,
                     )
+                    # Fail every in-flight request before tearing down.
+                    # A forward-time TP fault leaves peer ranks blocked
+                    # in NCCL, so the only recovery is process-group
+                    # teardown — but coordinator futures and stream
+                    # queues must be resolved first or HTTP clients
+                    # would hang. See #375 design ("Error Handling").
+                    if self._coordinator is not None:
+                        try:
+                            await self._coordinator.fail_all_pending(
+                                RuntimeError(f"Stage process(es) died: {summary}")
+                            )
+                        except Exception as exc:  # pragma: no cover
+                            logger.warning("fail_all_pending raised: %s", exc)
                     await self.stop()
                     return
             await asyncio.sleep(5.0)

@@ -147,7 +147,21 @@ async def _run_server(
         else:
             gpu_ids.add(v)
     any_tp = any(s.tp_size > 1 for s in pipeline_config.stages)
-    needs_mp = len(gpu_ids) > 1 or any_tp
+    # Any stage using the SGLang encoder backend (or "auto", which can
+    # resolve to "sglang") requires per-process CUDA isolation handled
+    # by MultiProcessPipelineRunner, even on a single-GPU pipeline.
+    # See sglang-project/sglang-omni#375 ("Required launcher change").
+    from sglang_omni_v1.config.compiler import (
+        _SGLANG_ENCODER_BACKENDS,
+        _resolve_factory_args,
+    )
+
+    any_sglang_backend = any(
+        _resolve_factory_args(s, pipeline_config).get("backend", "local")
+        in _SGLANG_ENCODER_BACKENDS
+        for s in pipeline_config.stages
+    )
+    needs_mp = len(gpu_ids) > 1 or any_tp or any_sglang_backend
     logger.info(
         "GPU placement: %s → %s",
         dict(pipeline_config.gpu_placement),

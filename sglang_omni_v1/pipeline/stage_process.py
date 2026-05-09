@@ -36,6 +36,13 @@ class StageProcessSpec:
     gpu_id: int = 0
     nccl_port: int | None = None
 
+    # When set, force the child process to see exactly one CUDA device as
+    # ``cuda:0`` even when ``tp_size == 1``. Required for the SGLang
+    # encoder backend so its in-process ``initialize_model_parallel`` and
+    # ``get_model`` calls land on the configured physical GPU regardless
+    # of the rank topology — see #375 design (GPU placement section).
+    single_visible_device: bool = False
+
     # Factory
     factory: str = ""
     factory_args: dict[str, Any] = field(default_factory=dict)
@@ -223,7 +230,7 @@ def get_stage_process_env(
     env: Mapping[str, str] | None = None,
 ) -> dict[str, str]:
     """Return per-process env overrides needed before TP child startup."""
-    if spec.tp_size <= 1:
+    if spec.tp_size <= 1 and not spec.single_visible_device:
         return {}
 
     source_env = env if env is not None else os.environ

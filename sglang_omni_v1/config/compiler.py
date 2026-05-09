@@ -14,9 +14,20 @@ from sglang_omni_v1.pipeline.control_plane import StageControlPlane
 from sglang_omni_v1.pipeline.stage.input import InputHandler
 from sglang_omni_v1.utils import import_string
 
+_SGLANG_ENCODER_BACKENDS: frozenset[str] = frozenset({"sglang", "auto"})
+
 
 def compile_pipeline(config: PipelineConfig) -> tuple[Coordinator, list[Stage]]:
-    """Build the coordinator and stage objects from the pipeline configuration."""
+    """Build the coordinator and stage objects from the pipeline configuration.
+
+    Single-process compile path. Stages that require multi-process
+    isolation — TP > 1 or any stage running the SGLang encoder backend
+    — are rejected here so the only path that reaches them is
+    :class:`MultiProcessPipelineRunner`. See sglang-project/sglang-omni#375
+    design ("Required launcher change", rule 5).
+    """
+    _reject_multiprocess_only_stages(config)
+
     stages_cfg, name_map, entry_stage = config.apply_fusion()
     endpoints = _allocate_endpoints(config, stages=stages_cfg)
 
@@ -133,6 +144,40 @@ def _create_input_handler(
 # ------------------------------------------------------------------
 # Factory args
 # ------------------------------------------------------------------
+
+
+def _reject_multiprocess_only_stages(config: PipelineConfig) -> None:
+    """Reject configs that the single-process compile path cannot serve.
+
+    - ``tp_size > 1`` is structurally incompatible with
+      :func:`compile_pipeline` because the single-process path never
+      injects ``tp_rank`` / ``tp_size`` / ``nccl_port`` into factory
+      args; a direct call would silently downgrade TP to 1. The
+      :class:`MultiProcessPipelineRunner` path handles TP via
+      ``_build_tp_stage_specs`` and is reached through ``serve.launcher``.
+    - ``backend in {"sglang", "auto"}`` requires the per-process CUDA
+      isolation that ``stage_process._prepare_cuda_environment``
+      performs only inside spawned children. A single-process compile
+      would load the SGLang worker on whichever GPU the launcher
+      happens to see, not the one the stage was assigned.
+    """
+    for stage_cfg in config.stages:
+        if stage_cfg.tp_size > 1:
+            raise ValueError(
+                f"Stage {stage_cfg.name!r} has tp_size={stage_cfg.tp_size} "
+                f"> 1; compile_pipeline() can only build single-rank "
+                f"stages. Route this config through MultiProcessPipelineRunner "
+                f"(serve.launcher takes care of this when tp_size > 1)."
+            )
+        backend = _resolve_factory_args(stage_cfg, config).get("backend", "local")
+        if backend in _SGLANG_ENCODER_BACKENDS:
+            raise ValueError(
+                f"Stage {stage_cfg.name!r} uses backend={backend!r}; "
+                f"the SGLang encoder worker requires per-process CUDA "
+                f"isolation that only the multi-process runner provides. "
+                f"Route through MultiProcessPipelineRunner via "
+                f"serve.launcher."
+            )
 
 
 def _resolve_factory_args(

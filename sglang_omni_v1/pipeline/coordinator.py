@@ -104,6 +104,33 @@ class Coordinator:
             except Exception as e:
                 logger.warning("Failed to send shutdown to stage %s: %s", name, e)
 
+    async def fail_all_pending(self, error: BaseException) -> None:
+        """Resolve every pending future / stream queue with ``error``.
+
+        Used by the runner when a stage process dies unexpectedly: forward
+        TP collectives may leave peer ranks blocked, so the only safe
+        recovery is to tear the group down. Without this, in-flight HTTP
+        requests would hang because their futures never resolve.
+        """
+        for request_id, future in list(self._completion_futures.items()):
+            if not future.done():
+                future.set_exception(error)
+        self._completion_futures.clear()
+
+        terminal = CompleteMessage(
+            request_id="*",
+            from_stage="coordinator",
+            success=False,
+            error=str(error) or "stage group fatal failure",
+        )
+        for request_id, queue in list(self._stream_queues.items()):
+            try:
+                queue.put_nowait(terminal)
+            except asyncio.QueueFull:  # pragma: no cover - unbounded queue
+                pass
+        self._stream_queues.clear()
+        logger.error("Coordinator failed all pending requests: %s", error)
+
     async def submit(self, request_id: str, request: OmniRequest | Any) -> Any:
         """Submit a request to the pipeline and wait for completion."""
         await self._submit_request(request_id, request)
