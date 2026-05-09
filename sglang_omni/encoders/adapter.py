@@ -33,8 +33,6 @@ class EncoderAdapter(Protocol):
 
     def build_request(self, payload: StagePayload) -> EncoderRequestData:
         """Materialise the encoder request from a stage payload."""
-        ...
 
     def apply_result(self, payload: StagePayload, result: object) -> StagePayload:
         """Apply the encoder result back into the payload and return it."""
-        ...
