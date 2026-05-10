@@ -49,17 +49,17 @@ STARTUP_TIMEOUT = 300
 WER_TIMEOUT = 600
 
 # Threshold reference: https://github.com/sgl-project/sglang-omni/pull/382#issuecomment-4366925373
-VC_WER_BELOW_50_CORPUS_MAX = 0.03
-VC_N_ABOVE_50_MAX = 1
+VC_WER_BELOW_50_CORPUS_MAX = 0.014184397163120567
+VC_N_ABOVE_50_MAX = 0
 
 # Note (Chenyang): The thresholds for the throughput_qps of tests/test_model/test_qwen3_omni_tts_ci.py
 # are the most unstable metrics, so I drop it a lot.
 
 _VC_NON_STREAM_P95 = {
     8: {
-        "throughput_qps": 3.00,
+        "throughput_qps": 4.025,
         "tok_per_s_agg": 7.6,
-        "latency_mean_s": 1.938,
+        "latency_mean_s": 1.925,
         "rtf_mean": 0.5843,
     },
 }

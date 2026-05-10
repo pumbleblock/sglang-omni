@@ -73,10 +73,10 @@ MMMU_AUDIO_N_ABOVE_50_MAX = 2
 
 _MMMU_AUDIO_P95 = {
     8: {
-        "throughput_qps": 0.142,
-        "tok_per_s_agg": 4.3,
-        "latency_mean_s": 31.533,
-        "rtf_mean": 0.4497,
+        "throughput_qps": 0.389,
+        "tok_per_s_agg": 9.9,
+        "latency_mean_s": 13.641,
+        "rtf_mean": 0.3777,
     },
 }
 MMMU_AUDIO_THRESHOLDS = apply_slack(_MMMU_AUDIO_P95)

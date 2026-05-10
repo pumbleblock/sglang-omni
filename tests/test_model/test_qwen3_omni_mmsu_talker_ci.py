@@ -69,17 +69,16 @@ MMSU_AUDIO_MIN_ACCURACY = 0.6
 #  - corpus WER over the "sane" subset (per-sample WER <= 50%)
 #  - count of catastrophic failures (per-sample WER > 50%)
 
-# Relaxed in V1 refactor: v0=0.04 → v1=0.08.
-MMSU_AUDIO_WER_BELOW_50_CORPUS_MAX = 0.06
-# Relaxed in V1 refactor: v0=0 → v1=3.
-MMSU_AUDIO_N_ABOVE_50_MAX = 1
+# Retuned after Qwen3-Omni talker sampler fix: MMSU talker stayed clean.
+MMSU_AUDIO_WER_BELOW_50_CORPUS_MAX = 0.024945770065075923
+MMSU_AUDIO_N_ABOVE_50_MAX = 0
 
 _MMSU_AUDIO_P95 = {
     8: {
-        "throughput_qps": 0.326,
-        "tok_per_s_agg": 5.2,
-        "latency_mean_s": 11.825,
-        "rtf_mean": 0.4188,
+        "throughput_qps": 1.007,
+        "tok_per_s_agg": 8.4,
+        "latency_mean_s": 7.099,
+        "rtf_mean": 0.4037,
     },
 }
 MMSU_AUDIO_THRESHOLDS = apply_slack(_MMSU_AUDIO_P95)
