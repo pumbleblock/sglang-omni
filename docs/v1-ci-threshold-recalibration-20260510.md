@@ -14,6 +14,11 @@ Run artifacts are local and intentionally not committed:
 - Qwen3-Omni: `.tune-runs/20260509T215050Z_qwen3-omni-v1_ALL_r5/`
 - S2-Pro: `.tune-runs/20260510T000700Z_s2-pro-v1_ALL_r5_retry1/`
 
+Raw per-run observation reports copied from those run directories:
+
+- `docs/calibration/v1-ci-threshold-observation-qwen3-omni-20260509.md`
+- `docs/calibration/v1-ci-threshold-observation-s2-pro-20260510.md`
+
 The first S2-Pro run at `.tune-runs/20260509T215050Z_s2-pro-v1_ALL_r5/` was discarded because the report had `N/A` for run 1/2 after an OOM retry artifact issue.
 
 ## Accuracy
