@@ -36,7 +36,6 @@ CONCURRENCY = 8
 MAX_SAMPLES = 10
 MAX_TOKENS = 256
 
-# Threshold reference: https://github.com/sgl-project/sglang-omni/pull/382#issuecomment-4366925373
 # Relaxed in V1 refactor: v0=0.5 → v1=0.4.
 VIDEOAMME_TALKER_THINKER_TEXT_MIN_ACCURACY = 0.4
 # Relaxed in V1 refactor: v0=0.015 → v1=0.02.

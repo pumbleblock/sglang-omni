@@ -39,8 +39,6 @@ STARTUP_TIMEOUT = 300
 # Relaxed in V1 refactor: v0=0.60 → v1=0.56.
 MMMU_MIN_ACCURACY = 0.56
 
-# Threshold reference: https://github.com/sgl-project/sglang-omni/pull/382#issuecomment-4366925373
-
 _MMMU_P95 = {
     8: {
         "throughput_qps": 0.661,

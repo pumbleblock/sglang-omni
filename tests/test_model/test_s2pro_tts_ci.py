@@ -76,7 +76,6 @@ S2PRO_STAGE2_SPEED_RESULTS_DIR_ENV = "S2PRO_STAGE2_SPEED_RESULTS_DIR"
 
 STREAMING_BENCHMARK_MAX_SAMPLES = 16
 
-# Thresholds reference: https://github.com/sgl-project/sglang-omni/pull/242
 # Note (chenyang): the RTF thresholds also includes the reference audio
 # processing time.
 
