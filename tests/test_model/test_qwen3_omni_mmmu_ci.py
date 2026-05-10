@@ -36,7 +36,6 @@ MODEL_PATH = "Qwen/Qwen3-Omni-30B-A3B-Instruct"
 CONCURRENCY = 8
 STARTUP_TIMEOUT = 300
 
-# Relaxed in V1 refactor: v0=0.60 → v1=0.56.
 MMMU_MIN_ACCURACY = 0.56
 
 _MMMU_P95 = {
