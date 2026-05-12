@@ -16,10 +16,12 @@ import socket
 from typing import Any
 
 from sglang_omni_v1.config.compiler import (
+    IpcRuntimeDir,
     _allocate_endpoints,
     _build_relay_config,
     _detect_same_gpu_targets,
     _resolve_factory_args,
+    create_ipc_runtime_dir,
 )
 from sglang_omni_v1.config.schema import PipelineConfig, StageConfig
 from sglang_omni_v1.pipeline import Coordinator
@@ -272,6 +274,7 @@ class MultiProcessPipelineRunner:
     def __init__(self, config: PipelineConfig):
         self._config = config
         self._coordinator: Coordinator | None = None
+        self._ipc_runtime_dir: IpcRuntimeDir | None = None
         self._groups: list[StageGroup] = []
         self._stage_endpoints: dict[str, str] = {}
         self._completion_task: asyncio.Task | None = None
@@ -297,7 +300,14 @@ class MultiProcessPipelineRunner:
         try:
             ctx = multiprocessing.get_context("spawn")
             stages_cfg, name_map, entry_stage = self._config.apply_fusion()
-            endpoints = _allocate_endpoints(self._config, stages=stages_cfg)
+            self._ipc_runtime_dir = create_ipc_runtime_dir(self._config)
+            endpoints = _allocate_endpoints(
+                self._config,
+                stages=stages_cfg,
+                ipc_base_dir=(
+                    self._ipc_runtime_dir.path if self._ipc_runtime_dir else None
+                ),
+            )
             groups = _build_stage_groups(
                 self._config,
                 ctx,
@@ -364,6 +374,12 @@ class MultiProcessPipelineRunner:
                     return
             await asyncio.sleep(5.0)
 
+    def _close_runtime_dir(self) -> None:
+        if self._ipc_runtime_dir is None:
+            return
+        self._ipc_runtime_dir.close()
+        self._ipc_runtime_dir = None
+
     async def stop(self) -> None:
         if not self._started:
             return
@@ -394,9 +410,12 @@ class MultiProcessPipelineRunner:
             except asyncio.CancelledError:
                 pass
 
-        await self._coordinator.stop()
-        self._groups.clear()
-        self._stage_endpoints.clear()
+        try:
+            await self._coordinator.stop()
+        finally:
+            self._groups.clear()
+            self._stage_endpoints.clear()
+            self._close_runtime_dir()
 
     async def _cleanup_on_failure(self) -> None:
         """Best-effort cleanup after a failed start()."""
@@ -426,3 +445,5 @@ class MultiProcessPipelineRunner:
             except Exception:
                 pass
             self._coordinator = None
+
+        self._close_runtime_dir()
