@@ -7,6 +7,9 @@ from types import SimpleNamespace
 import pytest
 import torch
 
+from sglang_omni_v1.cli.serve import apply_mem_fraction_cli_overrides
+from sglang_omni_v1.config import PipelineConfig
+from sglang_omni_v1.config.compiler import _resolve_factory_args
 from sglang_omni_v1.models.qwen3_omni.config import (
     Qwen3OmniPipelineConfig,
     Qwen3OmniSpeechPipelineConfig,
@@ -22,6 +25,14 @@ from tests.unit_test.fixtures.qwen_fakes import (
     make_qwen_payload,
     make_qwen_state,
 )
+
+
+def _stage(config: PipelineConfig, name: str):
+    return next(stage for stage in config.stages if stage.name == name)
+
+
+def _server_args_overrides(config: PipelineConfig, name: str) -> dict[str, object]:
+    return _stage(config, name).factory_args.get("server_args_overrides", {})
 
 
 def test_qwen_pipeline_config_and_state_contracts() -> None:
@@ -54,6 +65,81 @@ def test_qwen_pipeline_config_and_state_contracts() -> None:
     assert state.mm_inputs == {}
     assert state.encoder_inputs["image_encoder"]["cache_key"] == "img"
     assert state.thinker_out["is_final"] is True
+
+
+def test_qwen_cli_mem_fraction_precedence_targets_only_ar_stages() -> None:
+    """Preserves per-role CLI memory overrides for Qwen AR stages only."""
+    config = Qwen3OmniSpeechPipelineConfig(model_path="dummy")
+
+    apply_mem_fraction_cli_overrides(
+        config,
+        mem_fraction_static=0.80,
+        thinker_mem_fraction_static=0.70,
+        talker_mem_fraction_static=None,
+    )
+
+    assert _server_args_overrides(config, "thinker")["mem_fraction_static"] == 0.70
+    assert _server_args_overrides(config, "talker_ar")["mem_fraction_static"] == 0.80
+    for non_ar_stage in ("image_encoder", "audio_encoder", "code2wav"):
+        assert "server_args_overrides" not in _stage(config, non_ar_stage).factory_args
+
+
+def test_qwen_cli_mem_fraction_survives_runtime_overrides_overlay() -> None:
+    """Preserves CLI memory settings when compiler overlays runtime overrides."""
+    config = Qwen3OmniSpeechPipelineConfig(
+        model_path="dummy",
+        runtime_overrides={
+            "thinker": {
+                "server_args_overrides": {"disable_cuda_graph": True},
+            }
+        },
+    )
+
+    apply_mem_fraction_cli_overrides(
+        config,
+        mem_fraction_static=0.80,
+        thinker_mem_fraction_static=None,
+        talker_mem_fraction_static=None,
+    )
+
+    resolved = _resolve_factory_args(_stage(config, "thinker"), config)
+    assert resolved["server_args_overrides"]["mem_fraction_static"] == 0.80
+    assert resolved["server_args_overrides"]["disable_cuda_graph"] is True
+
+
+def test_qwen_thinker_encoder_reserve_auto_path_vs_explicit_pin() -> None:
+    """Preserves Qwen thinker reserve adjustment only for auto memory sizing."""
+    import sglang_omni_v1.models.qwen3_omni.stages as qwen_stages
+
+    auto_args = SimpleNamespace(mem_fraction_static=0.929)
+    pinned_args = SimpleNamespace(mem_fraction_static=0.70)
+
+    assert (
+        qwen_stages._apply_qwen_thinker_encoder_reserve(
+            auto_args,
+            has_explicit_mem_fraction_static=False,
+            encoder_mem_reserve=0.05,
+        )
+        is True
+    )
+    assert auto_args.mem_fraction_static == 0.879
+
+    assert (
+        qwen_stages._apply_qwen_thinker_encoder_reserve(
+            pinned_args,
+            has_explicit_mem_fraction_static=True,
+            encoder_mem_reserve=0.20,
+        )
+        is False
+    )
+    assert pinned_args.mem_fraction_static == 0.70
+
+    with pytest.raises(ValueError, match="below the safe floor"):
+        qwen_stages._apply_qwen_thinker_encoder_reserve(
+            SimpleNamespace(mem_fraction_static=0.15),
+            has_explicit_mem_fraction_static=False,
+            encoder_mem_reserve=0.10,
+        )
 
 
 def test_qwen_mm_aggregate_keeps_lightweight_inputs_and_prunes_after_merge() -> None:

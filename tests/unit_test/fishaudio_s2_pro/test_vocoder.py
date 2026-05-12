@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import threading
-
 import pytest
 import torch
 
@@ -11,20 +9,7 @@ from sglang_omni_v1.models.fishaudio_s2_pro import stages
 from sglang_omni_v1.models.fishaudio_s2_pro.payload_types import S2ProState
 from sglang_omni_v1.scheduling.messages import IncomingMessage
 from tests.unit_test.fixtures.fish_fakes import FakeFishCodec, make_s2pro_payload
-
-
-def run_scheduler(
-    scheduler, messages: list[IncomingMessage], output_count: int
-) -> list:
-    thread = threading.Thread(target=scheduler.start, daemon=True)
-    thread.start()
-    try:
-        for message in messages:
-            scheduler.inbox.put(message)
-        return [scheduler.outbox.get(timeout=2.0) for _ in range(output_count)]
-    finally:
-        scheduler.stop()
-        thread.join(timeout=2.0)
+from tests.unit_test.pipeline.helpers import run_scheduler
 
 
 def test_fish_vocoder_batches_and_trims_audio_by_code_length(

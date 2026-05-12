@@ -13,36 +13,108 @@ from sglang_omni_v1.models.qwen3_omni.talker_model_runner import QwenTalkerModel
 from sglang_omni_v1.models.qwen3_omni.talker_scheduler import QwenTalkerScheduler
 
 
-def test_qwen_talker_feedback_fifo_and_stream_done_contract() -> None:
-    """Preserves Talker FIFO feedback consumption and prefetched stream-done state."""
-    sched_req = SimpleNamespace(
-        data=SimpleNamespace(
-            pending_feedback_queue=deque([torch.tensor([1.0, 2.0])]),
-            pending_text_queue=deque(),
-            tts_pad_embed=torch.tensor([7.0, 8.0]),
-            thinker_chunks_done=False,
-        )
+def _sched_req(**data_kwargs: object) -> SimpleNamespace:
+    return SimpleNamespace(data=SimpleNamespace(**data_kwargs))
+
+
+def _take_decode_input(sched_req: SimpleNamespace) -> torch.Tensor | None:
+    return QwenTalkerModelRunner._take_next_decode_input_embed(
+        sched_req=sched_req,
+        device=torch.device("cpu"),
+        dtype=torch.float32,
     )
 
-    assert (
-        QwenTalkerModelRunner._take_next_decode_input_embed(
-            sched_req=sched_req,
-            device=torch.device("cpu"),
-            dtype=torch.float32,
-        )
-        is None
+
+def test_qwen_talker_decode_input_consumes_feedback_and_text_or_pad() -> None:
+    """Preserves FIFO consumption for ordinary text and final pad fallback."""
+    text_req = _sched_req(
+        pending_feedback_queue=deque([torch.tensor([1.0, 2.0])]),
+        pending_text_queue=deque([torch.tensor([20.0, 20.0])]),
+        tts_pad_embed=torch.tensor([7.0, 8.0]),
+        thinker_chunks_done=False,
     )
-    sched_req.data.pending_text_queue.append(torch.tensor([20.0, 20.0]))
+
     assert torch.equal(
-        QwenTalkerModelRunner._take_next_decode_input_embed(
-            sched_req=sched_req,
-            device=torch.device("cpu"),
-            dtype=torch.float32,
-        ),
+        _take_decode_input(text_req),
         torch.tensor([21.0, 22.0]),
     )
+    assert len(text_req.data.pending_feedback_queue) == 0
+    assert len(text_req.data.pending_text_queue) == 0
 
+    pad_req = _sched_req(
+        pending_feedback_queue=deque([torch.tensor([1.0, 2.0])]),
+        pending_text_queue=deque(),
+        tts_pad_embed=torch.tensor([7.0, 8.0]),
+        thinker_chunks_done=True,
+    )
+    assert torch.equal(_take_decode_input(pad_req), torch.tensor([8.0, 10.0]))
+    assert len(pad_req.data.pending_feedback_queue) == 0
+    assert len(pad_req.data.pending_text_queue) == 0
+
+
+def test_qwen_talker_decode_input_preserves_feedback_until_text_arrives() -> None:
+    """Preserves queued feedback when neither text nor final pad is ready."""
+    sched_req = _sched_req(
+        pending_feedback_queue=deque(
+            [torch.tensor([1.0, 2.0]), torch.tensor([3.0, 4.0])]
+        ),
+        pending_text_queue=deque(),
+        tts_pad_embed=torch.tensor([7.0, 8.0]),
+        thinker_chunks_done=False,
+    )
+
+    assert _take_decode_input(sched_req) is None
+    assert len(sched_req.data.pending_feedback_queue) == 2
+
+    sched_req.data.pending_text_queue.append(torch.tensor([20.0, 20.0]))
+    assert torch.equal(_take_decode_input(sched_req), torch.tensor([21.0, 22.0]))
+    assert len(sched_req.data.pending_feedback_queue) == 1
+    assert torch.equal(
+        sched_req.data.pending_feedback_queue[0],
+        torch.tensor([3.0, 4.0]),
+    )
+
+
+def test_qwen_talker_decode_readiness_requires_feedback_and_text_or_pad() -> None:
+    """Preserves decode gating across no-text, text-ready, and pad-ready states."""
+    no_text = SimpleNamespace(
+        pending_feedback_queue=deque([torch.tensor([1.0, 2.0])]),
+        pending_text_queue=deque(),
+        thinker_chunks_done=False,
+        tts_pad_embed=torch.tensor([7.0, 8.0]),
+    )
+    with_text = SimpleNamespace(
+        pending_feedback_queue=deque([torch.tensor([1.0, 2.0])]),
+        pending_text_queue=deque([torch.tensor([20.0, 20.0])]),
+        thinker_chunks_done=False,
+        tts_pad_embed=torch.tensor([7.0, 8.0]),
+    )
+    with_pad = SimpleNamespace(
+        pending_feedback_queue=deque([torch.tensor([1.0, 2.0])]),
+        pending_text_queue=deque(),
+        thinker_chunks_done=True,
+        tts_pad_embed=torch.tensor([7.0, 8.0]),
+    )
+
+    assert not QwenTalkerModelRunner._data_has_next_decode_input(no_text)
+    assert QwenTalkerModelRunner._data_has_next_decode_input(with_text)
+    assert QwenTalkerModelRunner._data_has_next_decode_input(with_pad)
+
+
+def test_qwen_talker_scheduler_waits_for_stream_done_without_replay() -> None:
+    """Preserves build gating and avoids replaying prefetched text chunks."""
     scheduler = object.__new__(QwenTalkerScheduler)
+    payload = SimpleNamespace(prefetched_chunks=[], prefetched_stream_done=False)
+
+    assert not scheduler._is_request_build_ready(
+        payload,
+        pending_stream_done=False,
+    )
+    assert scheduler._is_request_build_ready(
+        payload,
+        pending_stream_done=True,
+    )
+
     req_data = SimpleNamespace(
         pending_text_queue=deque([torch.tensor([11.0, 12.0])]),
         thinker_chunks_done=True,
