@@ -49,7 +49,7 @@ def test_simple_scheduler_batch_and_error_contracts() -> None:
 
 
 def test_threaded_simple_scheduler_runs_requests_concurrently() -> None:
-    # Covers concurrent worker execution before result emission.
+    """Covers concurrent worker execution before result emission."""
     started: list[str] = []
     lock = threading.Lock()
     both_started = threading.Event()
@@ -84,7 +84,8 @@ def test_threaded_simple_scheduler_runs_requests_concurrently() -> None:
 
 
 def test_threaded_simple_scheduler_reports_worker_errors() -> None:
-    # Covers worker exception emission as scheduler errors.
+    """Covers worker exception emission as scheduler errors."""
+
     def compute(payload: str) -> str:
         raise RuntimeError(payload)
 

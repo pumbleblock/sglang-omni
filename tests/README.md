@@ -22,6 +22,7 @@ tests/
     │   ├── helpers.py
     │   ├── test_compile.py
     │   ├── test_coordinator.py
+    │   ├── test_ipc.py
     │   ├── test_scheduler.py
     │   └── test_stage.py
     ├── qwen3_omni/
@@ -78,8 +79,8 @@ startup. Keep these focused on the smallest component that owns the behavior.
 Current ownership:
 
 - `unit_test/pipeline/`: model-agnostic V1 pipeline contracts, including config
-  compile/runtime wiring, coordinator behavior, stage routing, relay handling,
-  and scheduler batch/error semantics.
+  compile/runtime wiring, IPC lifecycle, coordinator behavior, stage routing,
+  relay handling, and scheduler batch/error/concurrency semantics.
 - `unit_test/qwen3_omni/`: Qwen3-Omni pipeline state/request contracts, talker
   contracts, and Code2Wav streaming/cleanup behavior.
 - `unit_test/fishaudio_s2_pro/`: FishAudio S2-Pro pipeline/tokenizer/TTS

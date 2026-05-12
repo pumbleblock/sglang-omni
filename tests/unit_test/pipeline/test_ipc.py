@@ -44,6 +44,7 @@ def _fake_stage_relay(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_ipc_runtime_dir_creation_and_close_contracts(tmp_path: Path) -> None:
+    """Preserves IPC runtime directory creation, uniqueness, and idempotent cleanup."""
     ipc_config = _make_config(tmp_path)
     tcp_config = _make_config(tmp_path, scheme="tcp")
 
@@ -64,6 +65,7 @@ def test_ipc_runtime_dir_creation_and_close_contracts(tmp_path: Path) -> None:
 
 
 def test_compile_pipeline_rejects_unmanaged_ipc(tmp_path: Path) -> None:
+    """Preserves rejection when compile_pipeline receives unmanaged IPC config."""
     with pytest.raises(ValueError, match="does not manage IPC"):
         compiler.compile_pipeline(_make_config(tmp_path))
 
@@ -72,6 +74,7 @@ def test_compile_pipeline_core_owns_or_preserves_ipc_runtime_dir(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Preserves owned IPC cleanup and caller-owned IPC directory preservation."""
     config = _make_config(tmp_path)
 
     def fail_compile_stage(*args, **kwargs):
@@ -97,6 +100,7 @@ def test_compile_pipeline_core_owns_or_preserves_ipc_runtime_dir(
 def test_compile_pipeline_core_returns_managed_ipc_runtime_dir(
     tmp_path: Path,
 ) -> None:
+    """Preserves managed IPC runtime directory ownership in compiled pipelines."""
     compiled = compiler.compile_pipeline_core(_make_config(tmp_path))
     runtime_dir = compiled.runtime_dir
     assert runtime_dir is not None
@@ -112,6 +116,7 @@ def test_compile_pipeline_core_returns_managed_ipc_runtime_dir(
 def test_ipc_stage_groups_use_unique_endpoints_for_same_model_name(
     tmp_path: Path,
 ) -> None:
+    """Preserves unique IPC endpoints across same-model pipeline instances."""
     config = _make_config(tmp_path)
     prep_a = compiler.prepare_pipeline_runtime(config)
     prep_b = compiler.prepare_pipeline_runtime(config)
@@ -148,6 +153,8 @@ async def test_mp_runner_cleans_runtime_dir_on_start_failure(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Preserves IPC runtime directory cleanup when runner startup fails."""
+
     class FailingCoordinator:
         def __init__(self, *args, **kwargs) -> None:
             del args, kwargs
@@ -172,6 +179,8 @@ async def test_mp_runner_stop_cleans_runtime_dir(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Preserves IPC runtime directory cleanup when the runner stops."""
+
     class FakeCoordinator:
         def __init__(
             self,
