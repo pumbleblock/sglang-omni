@@ -329,7 +329,7 @@ class MultiProcessPipelineRunner:
 
             for group in groups:
                 group.spawn(ctx)
-            self._groups = groups
+                self._groups.append(group)
 
             await asyncio.gather(*(g.wait_ready(timeout) for g in self._groups))
 
@@ -415,6 +415,8 @@ class MultiProcessPipelineRunner:
         finally:
             self._groups.clear()
             self._stage_endpoints.clear()
+            self._completion_task = None
+            self._coordinator = None
             self._close_runtime_dir()
 
     async def _cleanup_on_failure(self) -> None:
