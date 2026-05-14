@@ -15,7 +15,7 @@ Usage:
     # Launch the server:
     python -m sglang_omni.cli serve \
         --model-path Qwen/Qwen3-Omni-30B-A3B-Instruct \
-        --version v1 --port 8000
+        --port 8000
 
     # Download the test set:
     python -m benchmarks.dataset.prepare --dataset seedtts

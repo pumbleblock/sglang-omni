@@ -115,14 +115,23 @@ def start_server_from_cmd(
     log_file: Path | None,
     port: int,
     timeout: int = STARTUP_TIMEOUT,
+    env: dict[str, str] | None = None,
 ) -> subprocess.Popen:
     """Start a server from an arbitrary command and wait until healthy."""
+    process_env = os.environ.copy()
+    if env is not None:
+        process_env.update(env)
     if log_file is None:
-        proc = subprocess.Popen(cmd, start_new_session=True)
+        proc = subprocess.Popen(
+            cmd,
+            env=process_env,
+            start_new_session=True,
+        )
     else:
         with open(log_file, "w") as log_handle:
             proc = subprocess.Popen(
                 cmd,
+                env=process_env,
                 stdout=log_handle,
                 stderr=subprocess.STDOUT,
                 start_new_session=True,
