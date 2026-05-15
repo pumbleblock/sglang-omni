@@ -21,15 +21,12 @@ Requires:
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 
 import pytest
 import torch
 
-MODEL_PATH = os.environ.get(
-    "SGLANG_OMNI_TEST_QWEN3_MODEL", "Qwen/Qwen3-Omni-30B-A3B-Instruct"
-)
+from tests.test_model.conftest import QWEN3_OMNI_TEST_MODEL_PATH as MODEL_PATH
 
 
 def _model_cache_present(model_path: str) -> bool:

@@ -24,6 +24,13 @@ SELECTED_S2PRO_TTS_CONCURRENCIES = pytest.StashKey[tuple[int, ...]]()
 S2PRO_STAGE_OPTION = "--s2pro-stage"
 SELECTED_S2PRO_CI_STAGE = pytest.StashKey[str]()
 QWEN3_OMNI_MODEL_PATH = "Qwen/Qwen3-Omni-30B-A3B-Instruct"
+# Single source of truth for the model path used by Qwen3-Omni vision-encoder
+# benchmarks and the SGLang state they bring up. Honors
+# ``SGLANG_OMNI_TEST_QWEN3_MODEL=/local/path`` so an offline runner does not
+# fall back to the HF hub name in ``ServerArgs.model_path``.
+QWEN3_OMNI_TEST_MODEL_PATH = os.environ.get(
+    "SGLANG_OMNI_TEST_QWEN3_MODEL", QWEN3_OMNI_MODEL_PATH
+)
 QWEN3_OMNI_STARTUP_TIMEOUT = 300
 
 
@@ -154,7 +161,7 @@ def qwen3_omni_vision_sglang_env():
         initialize_model_parallel(tensor_model_parallel_size=1)
 
     sa = ServerArgs(
-        model_path=QWEN3_OMNI_MODEL_PATH,
+        model_path=QWEN3_OMNI_TEST_MODEL_PATH,
         trust_remote_code=True,
         tp_size=1,
         dtype="bfloat16",
