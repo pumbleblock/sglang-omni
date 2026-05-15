@@ -506,7 +506,7 @@ class OmniScheduler:
         return _Upstream.run_batch(self, batch, pp_proxy_tensors)
 
     def _handle_batch_failure(self, batch: Any, error: Exception) -> None:
-        reqs = list(getattr(batch, "reqs", []) or [])
+        reqs = list(batch.reqs)
         request_ids = [req.rid for req in reqs]
         logger.exception("OmniScheduler batch failed for requests=%s", request_ids)
         for req in reqs:
