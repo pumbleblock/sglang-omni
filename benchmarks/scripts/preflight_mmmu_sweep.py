@@ -181,8 +181,22 @@ def check_container(
 # ----------------------------------------------------------- model probes
 
 
-def probe_v1_models(base_url: str) -> dict[str, Any] | None:
+def probe_v1_models(base_url: str, host: str | None = None) -> dict[str, Any] | None:
+    """GET /v1/models from the orchestrator or over SSH from ``host``."""
     url = base_url.rstrip("/") + "/v1/models"
+    prefix = _shell_prefix(host)
+    if prefix:
+        try:
+            body = subprocess.check_output(
+                prefix + ["curl", "-sS", "--max-time", "15", url],
+                stderr=subprocess.DEVNULL,
+                text=True,
+                timeout=30,
+            ).strip()
+            return json.loads(body) if body else None
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired,
+                json.JSONDecodeError, ValueError):
+            return None
     try:
         with request.urlopen(url, timeout=15) as resp:
             return json.loads(resp.read().decode("utf-8"))
@@ -199,8 +213,14 @@ def _build_test_image_data_uri() -> str:
     return f"data:image/png;base64,{b64}"
 
 
-def probe_sglang_data_uri(base_url: str, model: str) -> dict[str, Any]:
-    """POST a minimal image_url request to the SGLang server. AC-7 step 6."""
+def probe_sglang_data_uri(
+    base_url: str, model: str, host: str | None = None
+) -> dict[str, Any]:
+    """POST a minimal image_url request to the SGLang server. AC-7 step 6.
+
+    When ``host`` is set, the curl runs over SSH so the probe verifies the
+    same machine that launched the container.
+    """
     payload = {
         "model": model,
         "messages": [
@@ -216,9 +236,38 @@ def probe_sglang_data_uri(base_url: str, model: str) -> dict[str, Any]:
         "temperature": 0.0,
     }
     url = base_url.rstrip("/") + "/v1/chat/completions"
-    body = json.dumps(payload).encode("utf-8")
+    body = json.dumps(payload)
+    prefix = _shell_prefix(host)
+    if prefix:
+        try:
+            status = subprocess.check_output(
+                prefix
+                + [
+                    "curl",
+                    "-sS",
+                    "-o",
+                    "/dev/null",
+                    "-w",
+                    "%{http_code}",
+                    "-X",
+                    "POST",
+                    "-H",
+                    "Content-Type: application/json",
+                    "-d",
+                    body,
+                    url,
+                ],
+                stderr=subprocess.DEVNULL,
+                text=True,
+                timeout=90,
+            ).strip()
+            return {"status": int(status) if status.isdigit() else status,
+                    "ok": status == "200"}
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+            return {"status": None, "ok": False, "error": str(exc)}
+    body_bytes = body.encode("utf-8")
     req = request.Request(
-        url, data=body, headers={"Content-Type": "application/json"}, method="POST"
+        url, data=body_bytes, headers={"Content-Type": "application/json"}, method="POST"
     )
     try:
         with request.urlopen(req, timeout=60) as resp:
@@ -276,7 +325,7 @@ def verify_dataset_revisions(report: PreflightReport, path: Path, repos: list[st
 
 
 def verify_launcher_log_references_snapshot(
-    log_path: Path, expected_snapshot: str
+    log_path: Path | str, expected_snapshot: str, host: str | None = None
 ) -> bool:
     """Return True iff the launcher log mentions the expected snapshot path.
 
@@ -285,15 +334,34 @@ def verify_launcher_log_references_snapshot(
     server actually loaded from the pinned snapshot, not from some other
     local checkpoint or the HF cache via a different revision.
 
+    When ``host`` is set, the log is read over SSH from the host that
+    launched the container. Otherwise read from the orchestrator's local
+    filesystem.
+
     Returns False if the file is missing, unreadable, or never mentions the
     expected path string.
     """
-    if not log_path.exists():
-        return False
-    try:
-        text = log_path.read_text(errors="replace")
-    except OSError:
-        return False
+    log_path_str = str(log_path)
+    prefix = _shell_prefix(host)
+    if prefix:
+        try:
+            text = subprocess.check_output(
+                prefix + ["cat", log_path_str],
+                stderr=subprocess.DEVNULL,
+                text=True,
+                timeout=15,
+                errors="replace",
+            )
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+            return False
+    else:
+        p = Path(log_path_str)
+        if not p.exists():
+            return False
+        try:
+            text = p.read_text(errors="replace")
+        except OSError:
+            return False
     return expected_snapshot in text
 
 
@@ -431,13 +499,12 @@ def print_launch_commands(
     port_omni: int,
     port_sglang: int,
 ) -> None:
-    """Print the docker run commands the H200 host operator must execute.
-
-    The preflight does not exec docker run itself: that requires GPU
-    access, network egress to docker hub, and persistent log paths the
-    operator owns. Instead, the gate prints the exact contracted
-    commands so the operator can copy-paste them under a tee that
-    preserves the launcher log for the AC-7 step (d) verification.
+    """Manual-audit fallback: print the docker run commands the operator
+    would execute by hand. The sweep itself now invokes `--launch` mode
+    over SSH (see `run_mmmu_sweep.sh`), so this flag is kept only for
+    operators who want to inspect the commands before allowing
+    `--launch` to issue them. For the operational path, prefer
+    `--launch` + `--host <H200>` over copy-paste.
     """
     print("# --- Container launch commands (run on the target H200 host) ---")
     if snapshot_omni:
@@ -462,8 +529,10 @@ def print_launch_commands(
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Preflight gate for the MMMU sweep.")
-    p.add_argument("--host-lane-a", default="ion8-omni")
-    p.add_argument("--host-lane-b", default="ion9-omni")
+    # Removed in Round 4: --host-lane-a / --host-lane-b were never actually
+    # wired into the per-stage verification; the sweep ssh's into each host
+    # and invokes preflight once per host with --host. Keeping them as dead
+    # options invited "launch on host X, verify on host Y" footguns.
     p.add_argument(
         "--base-url-omni",
         default="http://localhost:30000",
@@ -525,7 +594,9 @@ def parse_args() -> argparse.Namespace:
         "Each container's stdout/stderr is captured via "
         "`docker logs -f` redirected to the corresponding --launcher-log-* "
         "path, so AC-7 step (d) (log grep for snapshot path) can run. "
-        "Use --host-lane-* to launch on remote hosts via ssh.",
+        "Combine with --host <hostname> to launch on a remote H200 over SSH; "
+        "the sweep orchestrator (run_mmmu_sweep.sh) uses this mode "
+        "automatically with one preflight invocation per host.",
     )
     p.add_argument(
         "--strict-log-check",
@@ -616,7 +687,9 @@ def _check_launcher_logs(
                 f"launcher-log verification cannot run."
             )
             continue
-        if not verify_launcher_log_references_snapshot(Path(log_path), snapshot):
+        if not verify_launcher_log_references_snapshot(
+            log_path, snapshot, host=getattr(args, "host", None)
+        ):
             report.fail(
                 f"{backend_tag} launcher log at {log_path} does not reference the "
                 f"resolved snapshot path {snapshot}. The container is not loading "
@@ -800,7 +873,7 @@ def main() -> int:
             ("omni", args.base_url_omni),
             ("sglang", args.base_url_sglang),
         ):
-            info = probe_v1_models(base_url)
+            info = probe_v1_models(base_url, host=args.host)
             if info is None:
                 report.fail(
                     f"/v1/models on {base_url} did not respond. Confirm the {backend_tag} "
@@ -819,7 +892,9 @@ def main() -> int:
 
     # 4. SGLang data-URI compatibility probe.
     if not args.skip_container_check:
-        probe = probe_sglang_data_uri(args.base_url_sglang, "qwen3-vl")
+        probe = probe_sglang_data_uri(
+            args.base_url_sglang, "qwen3-vl", host=args.host
+        )
         report.sglang_data_uri_probe = probe
         if not probe.get("ok"):
             report.fail(

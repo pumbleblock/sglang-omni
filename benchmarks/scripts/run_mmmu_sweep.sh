@@ -300,7 +300,9 @@ fi
 
 echo "[sweep] validating retained artifacts..."
 if ! python benchmarks/scripts/validate_mmmu_artifacts.py "$OUT_ROOT" "$STATUS_LOG"; then
-    echo "[sweep] WARNING: artifact validator reported issues; see output above"
+    echo "[sweep] artifact validator FAILED — bundle is not safe for reporting" >&2
+    echo "[sweep] cells: see $STATUS_LOG" >&2
+    exit 3
 fi
 
 echo "[sweep] complete. results under $OUT_ROOT"

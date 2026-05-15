@@ -177,6 +177,81 @@ def _load_preflight_merge(preflight_json: str | None) -> dict:
         return {}
 
 
+class LaunchPolicyMismatch(RuntimeError):
+    """Raised when the eval's declared policy disagrees with preflight evidence.
+
+    AC-9 requires `prefix_cache_disabled` and `mem_fraction_static_configured`
+    to be provable from the actual server launch command, not declared by the
+    eval CLI. When preflight retained a `launch_command` and that command's
+    flags disagree with the CLI policy, we fail-fast at result construction
+    rather than letting the artifact self-assert an unverifiable policy.
+    """
+
+
+def _derive_launch_policy_from_preflight(
+    preflight: dict, container_name: str, declared_mem_fraction: float | None,
+    declared_prefix_cache_disabled: bool,
+) -> tuple[float | None, bool, bool]:
+    """Parse the retained `launch_command` and derive evidence-based policy.
+
+    Returns ``(mem_fraction_evidence, prefix_cache_disabled_evidence,
+    claimed_unverified)``.
+
+    - ``claimed_unverified`` is ``True`` when preflight had no launch_command
+      for this container (the eval's declared values are echoed back but
+      cannot be verified against launch evidence).
+    - When launch_command IS present, the returned tuple's first two
+      elements come straight from the command flags.
+    - When launch_command is present but disagrees with the eval CLI
+      declarations, raises ``LaunchPolicyMismatch``.
+    """
+    containers = (preflight.get("containers") or {}) if preflight else {}
+    container_record = containers.get(container_name) or {}
+    launch_cmd = container_record.get("launch_command")
+    if not launch_cmd:
+        # No evidence; the eval's declared values stand but are marked as
+        # claimed-unverified so downstream tooling can flag them.
+        return declared_mem_fraction, declared_prefix_cache_disabled, True
+
+    # Parse flags out of the recorded list. The launch command is a list of
+    # tokens that includes the docker run wrapper plus the server args; we
+    # just scan for the two policy flags we care about.
+    evidence_mem_fraction: float | None = None
+    evidence_prefix_cache_disabled = False
+    tokens = list(launch_cmd)
+    for i, tok in enumerate(tokens):
+        if tok == "--mem-fraction-static" and i + 1 < len(tokens):
+            try:
+                evidence_mem_fraction = float(tokens[i + 1])
+            except ValueError:
+                evidence_mem_fraction = None
+        if tok == "--disable-radix-cache":
+            evidence_prefix_cache_disabled = True
+
+    # Mismatch checks: fail fast so the retained artifact cannot claim
+    # a policy the launch command did not enforce.
+    if (
+        declared_mem_fraction is not None
+        and evidence_mem_fraction is not None
+        and abs(declared_mem_fraction - evidence_mem_fraction) > 1e-9
+    ):
+        raise LaunchPolicyMismatch(
+            f"Eval CLI declares --mem-fraction-static={declared_mem_fraction} "
+            f"but preflight launch_command for {container_name} carries "
+            f"--mem-fraction-static={evidence_mem_fraction}. The artifact "
+            f"cannot self-assert an unverified mem-fraction policy."
+        )
+    if declared_prefix_cache_disabled and not evidence_prefix_cache_disabled:
+        raise LaunchPolicyMismatch(
+            f"Eval CLI declares prefix_cache_disabled=True but preflight "
+            f"launch_command for {container_name} does not include "
+            f"--disable-radix-cache. The artifact cannot self-assert an "
+            f"unverified prefix-cache policy."
+        )
+
+    return evidence_mem_fraction, evidence_prefix_cache_disabled, False
+
+
 def _load_dataset_revisions(revisions_path: str | None) -> dict[str, str]:
     """Load the per-repo dataset revision dict for the metadata block."""
     from benchmarks.dataset.mmmu import _load_revision_map
@@ -249,6 +324,20 @@ def _build_run_metadata(
         # Fall back to live docker inspect if preflight didn't capture it.
         container_digest = get_container_image_digest(container_name)
 
+    # AC-9 launch policy: derive from preflight's retained launch_command
+    # rather than echoing the eval CLI. This raises LaunchPolicyMismatch
+    # when the CLI claims a policy the launch command did not enforce.
+    (
+        mem_fraction_evidence,
+        prefix_cache_disabled_evidence,
+        claimed_unverified,
+    ) = _derive_launch_policy_from_preflight(
+        preflight,
+        container_name,
+        declared_mem_fraction=config.mem_fraction_static,
+        declared_prefix_cache_disabled=config.prefix_cache_disabled,
+    )
+
     dataset_revisions = _load_dataset_revisions(config.dataset_revisions)
 
     if config.launcher_log:
@@ -288,10 +377,10 @@ def _build_run_metadata(
         timeout_s=config.timeout_s,
         repo_id=config.repo_id,
         max_samples=config.max_samples,
-        mem_fraction_static_configured=config.mem_fraction_static,
+        mem_fraction_static_configured=mem_fraction_evidence,
         kv_cache_capacity_tokens=kv_capacity,
         steady_state_gpu_gb=steady_state_gpu_gb,
-        prefix_cache_disabled=config.prefix_cache_disabled,
+        prefix_cache_disabled=prefix_cache_disabled_evidence,
         encoder_patches_active=False,
         host=os.environ.get("HOSTNAME") or os.environ.get("HOST"),
         container_name=container_name,

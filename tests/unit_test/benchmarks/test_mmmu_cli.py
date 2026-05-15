@@ -234,6 +234,155 @@ def test_run_metadata_records_mem_fraction_and_prefix_cache_policy() -> None:
     assert meta["prefix_cache_disabled"] is True
 
 
+def test_launch_policy_evidence_matches_cli(tmp_path) -> None:
+    """AC-9 evidence path: preflight launch_command flags are the source.
+
+    When preflight retained a launch_command with --mem-fraction-static
+    and --disable-radix-cache, the eval pulls the policy values from
+    those flags (not from the CLI echo).
+    """
+    import json
+
+    from benchmarks.eval.benchmark_omni_mmmu import (
+        MMMUEvalConfig,
+        _build_run_metadata,
+    )
+
+    preflight = {
+        "containers": {
+            "sglang-omni-hayden-benchmark": {
+                "container_image_digest": "sha256:abc",
+                "launch_command": [
+                    "docker", "run", "-d", "--name", "sglang-omni-hayden-benchmark",
+                    "frankleeeee/sglang-omni:dev",
+                    "sgl-omni", "serve", "--model-path", "/snapshot",
+                    "--text-only", "--port", "30000",
+                    "--mem-fraction-static", "0.85",
+                    "--disable-radix-cache",
+                ],
+            }
+        }
+    }
+    p = tmp_path / "preflight.json"
+    p.write_text(json.dumps(preflight))
+
+    cfg = MMMUEvalConfig(
+        model="m",
+        backend="omni",
+        preflight_json=str(p),
+        mem_fraction_static=0.85,
+        prefix_cache_disabled=True,
+    )
+    meta = _build_run_metadata(cfg)
+    assert meta["mem_fraction_static_configured"] == 0.85
+    assert meta["prefix_cache_disabled"] is True
+
+
+def test_launch_policy_missing_evidence_falls_back_to_cli(tmp_path) -> None:
+    """When preflight has no launch_command, the eval CLI values are echoed.
+
+    This is the dev-machine / pre-Round-3 fallback. The metadata still
+    populates but represents declaration, not evidence.
+    """
+    from benchmarks.eval.benchmark_omni_mmmu import (
+        MMMUEvalConfig,
+        _build_run_metadata,
+    )
+
+    cfg = MMMUEvalConfig(
+        model="m",
+        backend="omni",
+        mem_fraction_static=0.9,
+        prefix_cache_disabled=True,
+    )
+    meta = _build_run_metadata(cfg)
+    assert meta["mem_fraction_static_configured"] == 0.9
+    assert meta["prefix_cache_disabled"] is True
+
+
+def test_launch_policy_mismatch_raises(tmp_path) -> None:
+    """AC-9 fail-fast: when the launch command disagrees with CLI policy,
+    metadata construction raises so the artifact cannot self-assert an
+    unverified policy."""
+    import json
+
+    import pytest as _pytest
+
+    from benchmarks.eval.benchmark_omni_mmmu import (
+        LaunchPolicyMismatch,
+        MMMUEvalConfig,
+        _build_run_metadata,
+    )
+
+    preflight = {
+        "containers": {
+            "sglang-omni-hayden-benchmark": {
+                "launch_command": [
+                    "docker", "run", "-d", "--name", "sglang-omni-hayden-benchmark",
+                    "frankleeeee/sglang-omni:dev",
+                    "sgl-omni", "serve", "--model-path", "/snapshot",
+                    "--text-only", "--port", "30000",
+                    "--mem-fraction-static", "0.80",  # disagrees with CLI 0.9
+                    "--disable-radix-cache",
+                ],
+            }
+        }
+    }
+    p = tmp_path / "preflight.json"
+    p.write_text(json.dumps(preflight))
+
+    cfg = MMMUEvalConfig(
+        model="m",
+        backend="omni",
+        preflight_json=str(p),
+        mem_fraction_static=0.9,  # declared
+        prefix_cache_disabled=True,
+    )
+    with _pytest.raises(LaunchPolicyMismatch, match="mem-fraction"):
+        _build_run_metadata(cfg)
+
+
+def test_launch_policy_mismatch_prefix_cache_raises(tmp_path) -> None:
+    """When the launch command lacks --disable-radix-cache but the CLI
+    declares prefix_cache_disabled=True, fail-fast.
+    """
+    import json
+
+    import pytest as _pytest
+
+    from benchmarks.eval.benchmark_omni_mmmu import (
+        LaunchPolicyMismatch,
+        MMMUEvalConfig,
+        _build_run_metadata,
+    )
+
+    preflight = {
+        "containers": {
+            "sglang-omni-hayden-benchmark": {
+                "launch_command": [
+                    "docker", "run", "-d", "--name", "sglang-omni-hayden-benchmark",
+                    "frankleeeee/sglang-omni:dev",
+                    "sgl-omni", "serve", "--model-path", "/snapshot",
+                    "--mem-fraction-static", "0.9",
+                    # --disable-radix-cache deliberately absent
+                ],
+            }
+        }
+    }
+    p = tmp_path / "preflight.json"
+    p.write_text(json.dumps(preflight))
+
+    cfg = MMMUEvalConfig(
+        model="m",
+        backend="omni",
+        preflight_json=str(p),
+        mem_fraction_static=0.9,
+        prefix_cache_disabled=True,
+    )
+    with _pytest.raises(LaunchPolicyMismatch, match="disable-radix-cache"):
+        _build_run_metadata(cfg)
+
+
 def test_run_metadata_failure_count_from_request_results() -> None:
     """AC-9 value-source: failure_count comes from request_results, not 0."""
     from benchmarks.benchmarker.data import RequestResult
