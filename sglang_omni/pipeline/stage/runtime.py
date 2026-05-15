@@ -19,11 +19,7 @@ from typing import Any, Callable, Literal
 
 from sglang_omni.pipeline import relay_io
 from sglang_omni.pipeline.stage.input import DirectInput, InputHandler
-from sglang_omni.pipeline.stage.stream_queue import (
-    StreamItem,
-    StreamQueue,
-    StreamSignal,
-)
+from sglang_omni.pipeline.stage.stream_queue import StreamItem, StreamQueue
 from sglang_omni.pipeline.tp_control import TPLeaderFanout
 from sglang_omni.profiler.torch_profiler import TorchProfiler
 from sglang_omni.proto import (
@@ -33,6 +29,7 @@ from sglang_omni.proto import (
     ProfilerStopMessage,
     ShutdownMessage,
     StageInfo,
+    StreamMessage,
     SubmitMessage,
 )
 from sglang_omni.relay.base import Relay, create_relay
@@ -68,6 +65,7 @@ class Stage:
         stream_targets: list[str] | None = None,
         same_gpu_targets: set[str] | None = None,
         tp_fanout: TPLeaderFanout | None = None,
+        is_terminal: bool = False,
     ):
         self.name = name
         self.role = role
@@ -81,6 +79,7 @@ class Stage:
         self._stream_targets = stream_targets or []
         self._same_gpu_targets = same_gpu_targets or set()
         self._tp_fanout = tp_fanout
+        self._is_terminal = is_terminal
         self._owns_external_io = role in {"single", "leader"}
 
         # --- Relay ---
@@ -114,7 +113,6 @@ class Stage:
         self._aborted: set[str] = set()
         self._active_requests: set[str] = set()
         self._stream_queue: StreamQueue | None = None
-        self._pending_stream_data: dict[str, list[StreamItem | StreamSignal]] = {}
         self._stream_chunk_counters: dict[tuple[str, str], int] = {}
         self._scheduler_thread: threading.Thread | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
@@ -267,25 +265,6 @@ class Stage:
         merged = self.input_handler.receive(request_id, msg.from_stage, payload)
         if merged is not None:
             await self._execute(merged)
-            # Flush any stream data that arrived before this request was ready
-            for pending in self._pending_stream_data.pop(request_id, []):
-                if self._stream_queue is not None:
-                    if isinstance(pending, StreamItem):
-                        self._stream_queue.put(request_id, pending)
-                        self._route_stream_item(request_id, pending)
-                    elif isinstance(pending, StreamSignal):
-                        if pending.error:
-                            self._stream_queue.put_error(request_id, pending.error)
-                        elif pending.is_done:
-                            self._stream_queue.put_done(
-                                request_id, from_stage=pending.from_stage
-                            )
-                            self.scheduler.inbox.put(
-                                IncomingMessage(
-                                    request_id=request_id,
-                                    type="stream_done",
-                                )
-                            )
 
     async def _on_stream_chunk(self, msg: DataReadyMessage) -> None:
         request_id = msg.request_id
@@ -304,7 +283,7 @@ class Stage:
                     request_id,
                     exc,
                 )
-                self._queue_stream_error(request_id, msg.from_stage, exc)
+                await self._queue_stream_error(request_id, msg.from_stage, exc)
                 return
             self._route_stream_item(request_id, item)
             return
@@ -321,7 +300,7 @@ class Stage:
                 request_id,
                 exc,
             )
-            self._queue_stream_error(request_id, msg.from_stage, exc)
+            await self._queue_stream_error(request_id, msg.from_stage, exc)
             return
 
         item = StreamItem(
@@ -330,27 +309,39 @@ class Stage:
             from_stage=msg.from_stage,
             metadata=metadata,
         )
-        if self._stream_queue is None or not self._stream_queue.has(request_id):
-            self._pending_stream_data.setdefault(request_id, []).append(item)
+        if self._stream_queue is None:
+            # Sender targeted a non-stream-receiver stage; fail fast.
+            await self._send_failure(
+                request_id,
+                f"Stage {self.name!r} received stream chunk but is not a "
+                "stream receiver (no stream_queue allocated).",
+            )
             return
+        if not self._stream_queue.has(request_id):
+            self._stream_queue.open(request_id)
         self._route_stream_item(request_id, item)
 
-    def _queue_stream_error(
+    async def _queue_stream_error(
         self,
         request_id: str,
         from_stage: str | None,
         error: BaseException,
     ) -> None:
-        if self._stream_queue is not None and self._stream_queue.has(request_id):
-            self._stream_queue.put_error(
+        if request_id in self._aborted:
+            return
+        if self._stream_queue is None:
+            # Same misconfig as the chunk path above -- fail fast via coordinator.
+            logger.error(
+                "Stage %s: stream error with no queue for %s: %s",
+                self.name,
                 request_id,
                 error,
-                from_stage=from_stage,
             )
+            await self._send_failure(request_id, str(error))
             return
-        self._pending_stream_data.setdefault(request_id, []).append(
-            StreamSignal(from_stage=from_stage, error=error)
-        )
+        if not self._stream_queue.has(request_id):
+            self._stream_queue.open(request_id)
+        self._stream_queue.put_error(request_id, error, from_stage=from_stage)
 
     async def _read_chunk_metadata(
         self, shm_metadata: dict, blob_key: str
@@ -388,18 +379,10 @@ class Stage:
         if request_id in self._aborted:
             return
         self._active_requests.add(request_id)
-        if self._stream_queue is None or not self._stream_queue.has(request_id):
-            if msg.error:
-                self._pending_stream_data.setdefault(request_id, []).append(
-                    StreamSignal(
-                        from_stage=msg.from_stage, error=RuntimeError(msg.error)
-                    )
-                )
-            elif msg.is_done:
-                self._pending_stream_data.setdefault(request_id, []).append(
-                    StreamSignal(from_stage=msg.from_stage, is_done=True)
-                )
+        if self._stream_queue is None:
             return
+        if not self._stream_queue.has(request_id):
+            self._stream_queue.open(request_id)
         if msg.error:
             self._stream_queue.put_error(request_id, RuntimeError(msg.error))
         elif msg.is_done:
@@ -471,8 +454,11 @@ class Stage:
                 await self._route_result(out.request_id, out.data)
             elif out.type == "stream":
                 try:
-                    if out.target is None:
-                        for target in self._stream_targets:
+                    targets = (
+                        [out.target] if out.target is not None else self._stream_targets
+                    )
+                    if targets:
+                        for target in targets:
                             await self._send_stream_to_target(
                                 out.request_id,
                                 out.data,
@@ -480,10 +466,9 @@ class Stage:
                                 out.metadata,
                             )
                     else:
-                        await self._send_stream_to_target(
+                        await self._send_stream_to_coordinator(
                             out.request_id,
                             out.data,
-                            out.target,
                             out.metadata,
                         )
                 except Exception as exc:
@@ -628,6 +613,33 @@ class Stage:
             same_gpu_targets=self._same_gpu_targets,
         )
 
+    async def _send_stream_to_coordinator(
+        self,
+        request_id: str,
+        data: Any,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        """Forward a terminal stage's stream chunk to the Coordinator."""
+        if not self._is_terminal:
+            raise RuntimeError(
+                f"Stage {self.name!r} emitted untargeted stream chunk but isn't "
+                "terminal. Set ``terminal=True``, or use ``target=...`` / "
+                "``stream_to=[...]``."
+            )
+        if not self._owns_external_io:
+            return
+        if request_id in self._aborted:
+            return
+        modality = metadata.get("modality") if isinstance(metadata, dict) else None
+        msg = StreamMessage(
+            request_id=request_id,
+            from_stage=self.name,
+            chunk=data,
+            stage_name=self.name,
+            modality=modality,
+        )
+        await self.control_plane.send_stream(msg)
+
     async def _send_failure(self, request_id: str, error: str) -> None:
         if not self._owns_external_io:
             self._clear_request_state(request_id)
@@ -647,7 +659,6 @@ class Stage:
         self.input_handler.cancel(request_id)
         if self._stream_queue is not None:
             self._stream_queue.close(request_id)
-        self._pending_stream_data.pop(request_id, None)
         stale_keys = [
             key for key in self._stream_chunk_counters if key[0] == request_id
         ]
