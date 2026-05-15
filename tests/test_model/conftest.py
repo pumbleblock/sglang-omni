@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import os
 import sys
 
 import pytest
@@ -98,6 +99,73 @@ def qwen3_omni_talker_server(tmp_path_factory: pytest.TempPathFactory):
     )
     yield ServerHandle(proc=proc, port=port)
     stop_server(proc)
+
+
+@pytest.fixture(scope="session")
+def qwen3_omni_vision_sglang_env():
+    """Process-global SGLang dist + DP-attention bring-up shared by every
+    Qwen3-Omni vision-encoder benchmark module in ``tests/test_model``.
+
+    SGLang's TP group, DP-attention group, and global server-args slot are
+    all process-global. Two benchmark modules that each owned an unguarded
+    ``initialize_model_parallel`` call would trip an already-initialized
+    assertion when the combined command ``pytest -m benchmark tests/test_model``
+    runs them in the same process. Hoisting the bring-up to a session
+    fixture means it executes at most once per session; the explicit
+    ``model_parallel_is_initialized`` / ``torch.distributed.is_initialized``
+    guards are belt-and-suspenders against an external initializer.
+    """
+    import torch
+    import torch.distributed as torch_dist
+
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA not available")
+    torch.cuda.set_device(0)
+
+    os.environ.setdefault("MASTER_ADDR", "127.0.0.1")
+    os.environ.setdefault("MASTER_PORT", "29550")
+    os.environ.setdefault("WORLD_SIZE", "1")
+    os.environ.setdefault("RANK", "0")
+    os.environ.setdefault("NCCL_SOCKET_IFNAME", "lo")
+    os.environ.setdefault("NCCL_IB_DISABLE", "1")
+    os.environ.setdefault("NCCL_P2P_DISABLE", "1")
+
+    from sglang.srt.configs.model_config import ModelConfig
+    from sglang.srt.distributed.parallel_state import (
+        init_distributed_environment,
+        initialize_model_parallel,
+        model_parallel_is_initialized,
+    )
+    from sglang.srt.layers.dp_attention import initialize_dp_attention
+    from sglang.srt.models.qwen3_omni_moe import (  # noqa: F401 -- lazy-import order
+        Qwen3OmniMoeVisionEncoder,
+    )
+    from sglang.srt.server_args import (
+        ServerArgs,
+        set_global_server_args_for_scheduler,
+    )
+
+    if not torch_dist.is_initialized():
+        init_distributed_environment(
+            world_size=1,
+            rank=0,
+            distributed_init_method=f"tcp://127.0.0.1:{os.environ['MASTER_PORT']}",
+            local_rank=0,
+            backend="nccl",
+        )
+    if not model_parallel_is_initialized():
+        initialize_model_parallel(tensor_model_parallel_size=1)
+
+    sa = ServerArgs(
+        model_path=QWEN3_OMNI_MODEL_PATH,
+        trust_remote_code=True,
+        tp_size=1,
+        dtype="bfloat16",
+        disable_cuda_graph=True,
+        random_seed=123,
+    )
+    set_global_server_args_for_scheduler(sa)
+    initialize_dp_attention(sa, ModelConfig.from_server_args(sa))
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
