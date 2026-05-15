@@ -15,7 +15,7 @@ What the gate verifies:
    ``--download`` is passed).
 3. The two named benchmark containers exist with the expected images:
    - ``sglang-omni-hayden-benchmark`` ← ``frankleeeee/sglang-omni:dev``
-   - ``sglang-hayden-benchmark``       ← ``lmsysorg/sglang``
+   - ``sglang-hayden-benchmark``       ← ``lmsysorg/sglang:dev``
    Container names are enforced strictly. Image digests captured via
    ``docker inspect`` are recorded in the preflight output JSON.
 4. Each running server's ``/v1/models`` endpoint returns the expected
@@ -54,7 +54,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 EXPECTED_CONTAINERS: dict[str, str] = {
     "sglang-omni-hayden-benchmark": "frankleeeee/sglang-omni:dev",
-    "sglang-hayden-benchmark": "lmsysorg/sglang",
+    "sglang-hayden-benchmark": "lmsysorg/sglang:dev",
 }
 
 DEFAULT_MODELS: list[tuple[str, str]] = [
@@ -527,7 +527,7 @@ def print_launch_commands(
             f"docker run -d --name sglang-hayden-benchmark "
             f"--gpus all --network host "
             f"-v {snapshot_sglang}:/snapshot:ro "
-            f"lmsysorg/sglang "
+            f"lmsysorg/sglang:dev "
             f"python -m sglang.launch_server --model-path /snapshot --port {port_sglang} "
             f"2>&1 | tee /tmp/sglang-benchmark.log"
         )
@@ -835,7 +835,7 @@ def main() -> int:
             sglang_record = report.containers.setdefault("sglang-hayden-benchmark", {})
             ok_sglang = launch_named_container(
                 name="sglang-hayden-benchmark",
-                image="lmsysorg/sglang",
+                image="lmsysorg/sglang:dev",
                 snapshot_path=snapshot_sglang,
                 server_cmd=sglang_server_cmd,
                 log_path=log_sglang,

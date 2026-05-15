@@ -12,7 +12,7 @@
 #     - sglang-omni-hayden-benchmark (image frankleeeee/sglang-omni:dev)
 #       hosting sgl-omni serve --text-only --disable-radix-cache
 #                   --mem-fraction-static <X> on port 30000
-#     - sglang-hayden-benchmark (image lmsysorg/sglang)
+#     - sglang-hayden-benchmark (image lmsysorg/sglang:dev)
 #       hosting python -m sglang.launch_server --disable-radix-cache
 #                   --mem-fraction-static <X> on port 30001
 #   Preflight runs ON the host (over SSH from the orchestrator) so all of
@@ -171,7 +171,7 @@ run_cell() {
         container_image="frankleeeee/sglang-omni:dev"
     else
         container_name="sglang-hayden-benchmark"
-        container_image="lmsysorg/sglang"
+        container_image="lmsysorg/sglang:dev"
     fi
 
     # All metadata-source flags are threaded into the eval. Paths refer to the
