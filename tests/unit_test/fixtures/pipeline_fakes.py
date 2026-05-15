@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import queue
 from dataclasses import dataclass, field
+from types import SimpleNamespace
 from typing import Any, Callable
 
 import torch
@@ -176,6 +177,69 @@ class RecordingCoordinatorControlPlane:
 class FakeMpContext:
     def Queue(self) -> queue.Queue:
         return queue.Queue()
+
+
+class FakeCoordinator:
+    def __init__(
+        self,
+        completion_endpoint: str,
+        abort_endpoint: str,
+        entry_stage: str,
+        terminal_stages: list[str] | None = None,
+    ) -> None:
+        del abort_endpoint, entry_stage, terminal_stages
+        self.control_plane = SimpleNamespace(completion_endpoint=completion_endpoint)
+        self.registered: dict[str, str] = {}
+        self.stopped = False
+
+    async def start(self) -> None:
+        return None
+
+    async def run_completion_loop(self) -> None:
+        await asyncio.Event().wait()
+
+    def register_stage(self, name: str, endpoint: str) -> None:
+        self.registered[name] = endpoint
+
+    async def shutdown_stages(self) -> None:
+        return None
+
+    async def stop(self) -> None:
+        self.stopped = True
+
+
+class FakeStageGroup:
+    stage_name = "preprocessing"
+    tp_size = 1
+
+    def __init__(self, leader_endpoint: str) -> None:
+        self.leader_endpoint = leader_endpoint
+        self.shutdown_called = False
+
+    @property
+    def processes(self) -> list[object]:
+        return []
+
+    def spawn(self, ctx) -> None:
+        del ctx
+
+    async def wait_ready(self, timeout: float) -> None:
+        del timeout
+
+    def any_dead(self) -> bool:
+        return False
+
+    def dead_summary(self) -> str:
+        return "(none)"
+
+    async def shutdown(self) -> None:
+        self.shutdown_called = True
+
+
+def fake_stage_groups_from_endpoints(*args, **kwargs) -> list[FakeStageGroup]:
+    del args
+    endpoints = kwargs["endpoints"]
+    return [FakeStageGroup(endpoints["stage_preprocessing"])]
 
 
 def make_scheduler(**_: Any) -> FakeScheduler:

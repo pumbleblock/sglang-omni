@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import asyncio
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 from fastapi import FastAPI
@@ -14,6 +12,11 @@ import sglang_omni.pipeline.mp_runner as mp_runner
 import sglang_omni.serve.launcher as launcher
 from sglang_omni.config.schema import EndpointsConfig, PipelineConfig, StageConfig
 from sglang_omni.pipeline.endpoints import allocate_endpoints, create_ipc_runtime_dir
+from tests.unit_test.fixtures.pipeline_fakes import (
+    FakeCoordinator,
+    FakeStageGroup,
+    fake_stage_groups_from_endpoints,
+)
 
 
 def noop_factory():
@@ -33,66 +36,6 @@ def _make_config(base_path: Path, *, scheme: str = "ipc") -> PipelineConfig:
         ],
         endpoints=EndpointsConfig(scheme=scheme, base_path=str(base_path)),
     )
-
-
-class FakeCoordinator:
-    def __init__(
-        self,
-        completion_endpoint: str,
-        abort_endpoint: str,
-        entry_stage: str,
-        terminal_stages: list[str] | None = None,
-    ) -> None:
-        del abort_endpoint, entry_stage, terminal_stages
-        self.control_plane = SimpleNamespace(completion_endpoint=completion_endpoint)
-        self.registered: dict[str, str] = {}
-        self.stopped = False
-
-    async def start(self) -> None:
-        return None
-
-    async def run_completion_loop(self) -> None:
-        await asyncio.Event().wait()
-
-    def register_stage(self, name: str, endpoint: str) -> None:
-        self.registered[name] = endpoint
-
-    async def shutdown_stages(self) -> None:
-        return None
-
-    async def stop(self) -> None:
-        self.stopped = True
-
-
-class FakeGroup:
-    stage_name = "preprocessing"
-    tp_size = 1
-    processes: list[object] = []
-
-    def __init__(self, leader_endpoint: str) -> None:
-        self.leader_endpoint = leader_endpoint
-        self.shutdown_called = False
-
-    def spawn(self, ctx) -> None:
-        del ctx
-
-    async def wait_ready(self, timeout: float) -> None:
-        del timeout
-
-    def any_dead(self) -> bool:
-        return False
-
-    def dead_summary(self) -> str:
-        return "(none)"
-
-    async def shutdown(self) -> None:
-        self.shutdown_called = True
-
-
-def _fake_groups_from_endpoints(*args, **kwargs) -> list[FakeGroup]:
-    del args
-    endpoints = kwargs["endpoints"]
-    return [FakeGroup(endpoints["stage_preprocessing"])]
 
 
 def test_ipc_runtime_dir_creation_and_close_contracts(tmp_path: Path) -> None:
@@ -130,7 +73,9 @@ async def test_mp_runner_starts_same_model_instances_with_unique_ipc_endpoints(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(mp_runner, "Coordinator", FakeCoordinator)
-    monkeypatch.setattr(mp_runner, "_build_stage_groups", _fake_groups_from_endpoints)
+    monkeypatch.setattr(
+        mp_runner, "_build_stage_groups", fake_stage_groups_from_endpoints
+    )
 
     config = _make_config(tmp_path)
     runner_a = mp_runner.MultiProcessPipelineRunner(config)
@@ -167,7 +112,9 @@ async def test_mp_runner_cleans_runtime_dir_on_start_failure(
             raise RuntimeError("boom")
 
     monkeypatch.setattr(mp_runner, "Coordinator", FailingCoordinator)
-    monkeypatch.setattr(mp_runner, "_build_stage_groups", _fake_groups_from_endpoints)
+    monkeypatch.setattr(
+        mp_runner, "_build_stage_groups", fake_stage_groups_from_endpoints
+    )
     runner = mp_runner.MultiProcessPipelineRunner(_make_config(tmp_path))
 
     with pytest.raises(RuntimeError, match="boom"):
@@ -182,7 +129,7 @@ async def test_mp_runner_stop_cleans_runtime_dir(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(mp_runner, "Coordinator", FakeCoordinator)
-    group = FakeGroup("ipc://stage.sock")
+    group = FakeStageGroup("ipc://stage.sock")
     monkeypatch.setattr(mp_runner, "_build_stage_groups", lambda *a, **k: [group])
 
     runner = mp_runner.MultiProcessPipelineRunner(_make_config(tmp_path))

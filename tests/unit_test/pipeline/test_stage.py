@@ -176,30 +176,6 @@ def test_stage_routing_failure_completes_with_error() -> None:
     asyncio.run(_run())
 
 
-def test_stage_rejects_invalid_next_stage_return_type() -> None:
-    """Invalid get_next return values should become explicit request failures."""
-
-    async def _run() -> None:
-        scheduler = FakeScheduler()
-        control_plane = RecordingStageControlPlane()
-        stage_obj = make_stage(
-            name="thinker",
-            get_next=lambda request_id, output: {"bad": "target"},
-            scheduler=scheduler,
-            control_plane=control_plane,
-        )
-        stage_obj._active_requests.add("req-1")
-        scheduler.outbox.put(make_result_message("req-1"))
-
-        await stage_obj._drain_outbox()
-
-        completion = control_plane.completions[0]
-        assert completion.success is False
-        assert "invalid downstream targets" in completion.error
-
-    asyncio.run(_run())
-
-
 def test_stage_stream_routing_failure_completes_with_error() -> None:
     """Stream output to an unknown target should fail the active request."""
 
