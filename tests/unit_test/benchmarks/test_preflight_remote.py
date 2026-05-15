@@ -176,3 +176,93 @@ def test_verify_launcher_log_remote_fails_when_ssh_errors() -> None:
             "/tmp/missing.log", "/snapshot/abc123", host="ion8-omni"
         )
     assert ok is False
+
+
+# ---------------------------------------------------------------------------
+# Round 5 regression: AC-9 launch evidence must survive check_container.
+# Codex Round 4 found that the prior `report.containers[name] = info`
+# wholesale-overwrote any `launch_command` written by an earlier
+# `launch_named_container` call, silently dropping the AC-9 evidence the
+# eval needs. This test runs the real serialization shape and asserts the
+# field persists.
+# ---------------------------------------------------------------------------
+
+
+def test_check_container_preserves_launch_command_from_earlier_launch() -> None:
+    """Real flow: launch records launch_command → check_container merges
+    digest/image fields onto the same record → serialized report still
+    carries launch_command for downstream metadata derivation.
+    """
+    mod = _import_preflight()
+
+    report = mod.PreflightReport()
+    container_name = "sglang-omni-hayden-benchmark"
+    expected_launch_cmd = [
+        "docker", "run", "-d", "--name", container_name,
+        "frankleeeee/sglang-omni:dev",
+        "sgl-omni", "serve", "--model-path", "/snapshot",
+        "--mem-fraction-static", "0.9",
+        "--disable-radix-cache",
+    ]
+
+    # Simulate what `launch_named_container(..., record=record)` writes
+    # into the per-container record before any later inspect pass runs.
+    record = report.containers.setdefault(container_name, {})
+    record["launch_command"] = list(expected_launch_cmd)
+    record["snapshot_path"] = "/snapshots/abc123"
+
+    # Now run the inspect-style update path. The real check_container calls
+    # docker_inspect; patch those to return known values so we exercise the
+    # *update* logic specifically.
+    with patch.object(
+        mod, "docker_inspect_image", return_value="sha256:deadbeef"
+    ), patch.object(
+        mod, "docker_inspect_repo_tag", return_value="frankleeeee/sglang-omni:dev"
+    ):
+        mod.check_container(
+            container_name, "frankleeeee/sglang-omni:dev", report, host=None
+        )
+
+    # The post-check record must still carry the launch_command + snapshot.
+    final = report.containers[container_name]
+    assert final.get("launch_command") == expected_launch_cmd, (
+        "check_container wholesale-overwrote launch_command (Codex Round 4 bug)"
+    )
+    assert final.get("snapshot_path") == "/snapshots/abc123"
+    # The inspect-stage fields are also present.
+    assert final.get("container_image_digest") == "sha256:deadbeef"
+    assert final.get("container_image") == "frankleeeee/sglang-omni:dev"
+
+
+def test_check_container_round_trip_via_json_keeps_launch_command(tmp_path) -> None:
+    """Serializing the report to JSON and reloading must preserve launch_command."""
+    import json
+    from dataclasses import asdict
+
+    mod = _import_preflight()
+
+    report = mod.PreflightReport()
+    name = "sglang-hayden-benchmark"
+    report.containers.setdefault(name, {})["launch_command"] = [
+        "docker", "run", "-d", "--name", name, "lmsysorg/sglang",
+        "python", "-m", "sglang.launch_server",
+        "--mem-fraction-static", "0.85",
+        "--disable-radix-cache",
+    ]
+
+    with patch.object(
+        mod, "docker_inspect_image", return_value="sha256:1234"
+    ), patch.object(
+        mod, "docker_inspect_repo_tag", return_value="lmsysorg/sglang"
+    ):
+        mod.check_container(name, "lmsysorg/sglang", report, host=None)
+
+    # Write the report and reload from disk.
+    out = tmp_path / "preflight.json"
+    out.write_text(json.dumps(asdict(report)))
+    reloaded = json.loads(out.read_text())
+
+    container = reloaded["containers"][name]
+    assert "launch_command" in container
+    assert "--disable-radix-cache" in container["launch_command"]
+    assert "--mem-fraction-static" in container["launch_command"]

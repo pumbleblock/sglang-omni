@@ -73,6 +73,50 @@ def _load_jsonl(path: Path) -> list[dict]:
     return out
 
 
+def _validate_launch_command(
+    preflight: dict, container_name: str, row_label: str
+) -> list[str]:
+    """Assert the retained preflight has a launch_command with required flags.
+
+    AC-9 requires `prefix_cache_disabled` / `mem_fraction_static_configured`
+    to be provable from launch evidence. The validator enforces that the
+    retained preflight JSON contains, for each cell's container, a
+    `launch_command` that includes ``--disable-radix-cache`` and a
+    numeric ``--mem-fraction-static <X>``.
+    """
+    issues: list[str] = []
+    containers = (preflight.get("containers") or {}) if preflight else {}
+    container_record = containers.get(container_name) or {}
+    launch_cmd = container_record.get("launch_command")
+    if not launch_cmd:
+        issues.append(
+            f"{row_label}: retained preflight.json container {container_name!r} "
+            f"is missing `launch_command`; cannot prove launch policy from evidence"
+        )
+        return issues
+    tokens = list(launch_cmd)
+    if "--disable-radix-cache" not in tokens:
+        issues.append(
+            f"{row_label}: launch_command for {container_name!r} is missing "
+            f"--disable-radix-cache; prefix_cache_disabled cannot be proven"
+        )
+    has_mem_fraction = False
+    for i, tok in enumerate(tokens):
+        if tok == "--mem-fraction-static" and i + 1 < len(tokens):
+            try:
+                float(tokens[i + 1])
+                has_mem_fraction = True
+            except ValueError:
+                pass
+            break
+    if not has_mem_fraction:
+        issues.append(
+            f"{row_label}: launch_command for {container_name!r} is missing a "
+            f"numeric --mem-fraction-static <X>; mem-fraction cannot be proven"
+        )
+    return issues
+
+
 def _validate_status_row(row: dict) -> list[str]:
     """Validate one sweep-status.jsonl row + the bundle it points at."""
     issues: list[str] = []
@@ -135,6 +179,30 @@ def _validate_status_row(row: dict) -> list[str]:
                 f"{row_label}: status row digest {row_digest!r} != "
                 f"run_metadata digest {meta_digest!r}"
             )
+
+    # AC-9 launch-evidence enforcement: open the cell's retained preflight.json
+    # and require launch_command + the contracted policy flags for the
+    # container that actually served this cell.
+    if row.get("status") == "success":
+        preflight_path = cell_dir / "preflight.json"
+        if preflight_path.exists():
+            try:
+                preflight = json.loads(preflight_path.read_text())
+            except json.JSONDecodeError as exc:
+                issues.append(
+                    f"{row_label}: preflight.json is not valid JSON ({exc})"
+                )
+            else:
+                container_name = meta.get("container_name") or row.get("container_name")
+                if container_name:
+                    issues.extend(
+                        _validate_launch_command(preflight, container_name, row_label)
+                    )
+                else:
+                    issues.append(
+                        f"{row_label}: cannot determine container_name to check "
+                        f"launch_command evidence"
+                    )
 
     return issues
 

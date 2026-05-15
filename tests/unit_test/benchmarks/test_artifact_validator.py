@@ -34,7 +34,23 @@ def _run_validator(out_root: Path, status_log: Path) -> tuple[int, str]:
     return res.returncode, res.stdout + res.stderr
 
 
-def _write_complete_cell(cell_dir: Path, digest: str = "sha256:abc") -> None:
+_DEFAULT_LAUNCH_CMD = [
+    "docker", "run", "-d", "--name", "sglang-omni-hayden-benchmark",
+    "frankleeeee/sglang-omni:dev",
+    "sgl-omni", "serve", "--model-path", "/snapshot",
+    "--text-only", "--port", "30000",
+    "--mem-fraction-static", "0.9",
+    "--disable-radix-cache",
+]
+
+
+def _write_complete_cell(
+    cell_dir: Path,
+    digest: str = "sha256:abc",
+    *,
+    launch_command: list[str] | None = _DEFAULT_LAUNCH_CMD,
+    container_name: str = "sglang-omni-hayden-benchmark",
+) -> None:
     cell_dir.mkdir(parents=True, exist_ok=True)
     result = {
         "summary": {},
@@ -66,7 +82,7 @@ def _write_complete_cell(cell_dir: Path, digest: str = "sha256:abc") -> None:
             "prefix_cache_disabled": True,
             "encoder_patches_active": False,
             "host": "ion8-omni",
-            "container_name": "sglang-omni-hayden-benchmark",
+            "container_name": container_name,
             "container_image": "frankleeeee/sglang-omni:dev",
             "container_image_digest": digest,
             "server_port": 30000,
@@ -77,7 +93,23 @@ def _write_complete_cell(cell_dir: Path, digest: str = "sha256:abc") -> None:
         "per_sample": [],
     }
     (cell_dir / "mmmu_results.json").write_text(json.dumps(result))
-    (cell_dir / "preflight.json").write_text("{}")
+    preflight = {
+        "containers": {
+            container_name: (
+                {
+                    "container_image_digest": digest,
+                    "container_image": "frankleeeee/sglang-omni:dev",
+                    "launch_command": list(launch_command),
+                }
+                if launch_command is not None
+                else {
+                    "container_image_digest": digest,
+                    "container_image": "frankleeeee/sglang-omni:dev",
+                }
+            )
+        }
+    }
+    (cell_dir / "preflight.json").write_text(json.dumps(preflight))
     (cell_dir / "launcher.log").write_text("ready /snapshot/abc123\n")
     (cell_dir / "stderr.log").write_text("")
 
@@ -198,6 +230,101 @@ def test_validator_fails_on_digest_mismatch(tmp_path) -> None:
     rc, out = _run_validator(out_root, status)
     assert rc == 1
     assert "digest" in out
+
+
+def test_validator_fails_when_preflight_missing_launch_command(tmp_path) -> None:
+    """Round 5 AC-9 evidence enforcement: a cell whose retained preflight.json
+    is missing `launch_command` for its container is rejected. This closes
+    the Codex Round 4 evidence-loss path.
+    """
+    out_root = tmp_path / "sweep"
+    cell = out_root / "lane_A" / "omni" / "rep_0"
+    _write_complete_cell(cell, digest="sha256:abc", launch_command=None)
+    status = tmp_path / "sweep-status.jsonl"
+    _write_status(
+        status,
+        [
+            {
+                "host": "ion8-omni",
+                "backend": "omni",
+                "lane": "A",
+                "rep": 0,
+                "status": "success",
+                "cell_dir": str(cell),
+                "container_image_digest": "sha256:abc",
+                "container_name": "sglang-omni-hayden-benchmark",
+            }
+        ],
+    )
+    rc, out = _run_validator(out_root, status)
+    assert rc == 1
+    assert "launch_command" in out
+
+
+def test_validator_fails_when_launch_command_missing_disable_radix_cache(tmp_path) -> None:
+    """preflight has launch_command but is missing --disable-radix-cache → fail."""
+    out_root = tmp_path / "sweep"
+    cell = out_root / "lane_A" / "omni" / "rep_0"
+    weak_cmd = [
+        "docker", "run", "-d", "--name", "sglang-omni-hayden-benchmark",
+        "frankleeeee/sglang-omni:dev",
+        "sgl-omni", "serve", "--model-path", "/snapshot",
+        "--mem-fraction-static", "0.9",
+        # --disable-radix-cache absent
+    ]
+    _write_complete_cell(cell, digest="sha256:abc", launch_command=weak_cmd)
+    status = tmp_path / "sweep-status.jsonl"
+    _write_status(
+        status,
+        [
+            {
+                "host": "ion8-omni",
+                "backend": "omni",
+                "lane": "A",
+                "rep": 0,
+                "status": "success",
+                "cell_dir": str(cell),
+                "container_image_digest": "sha256:abc",
+                "container_name": "sglang-omni-hayden-benchmark",
+            }
+        ],
+    )
+    rc, out = _run_validator(out_root, status)
+    assert rc == 1
+    assert "disable-radix-cache" in out
+
+
+def test_validator_fails_when_launch_command_missing_mem_fraction(tmp_path) -> None:
+    """preflight launch_command is missing --mem-fraction-static → fail."""
+    out_root = tmp_path / "sweep"
+    cell = out_root / "lane_A" / "omni" / "rep_0"
+    weak_cmd = [
+        "docker", "run", "-d", "--name", "sglang-omni-hayden-benchmark",
+        "frankleeeee/sglang-omni:dev",
+        "sgl-omni", "serve", "--model-path", "/snapshot",
+        "--disable-radix-cache",
+        # --mem-fraction-static absent
+    ]
+    _write_complete_cell(cell, digest="sha256:abc", launch_command=weak_cmd)
+    status = tmp_path / "sweep-status.jsonl"
+    _write_status(
+        status,
+        [
+            {
+                "host": "ion8-omni",
+                "backend": "omni",
+                "lane": "A",
+                "rep": 0,
+                "status": "success",
+                "cell_dir": str(cell),
+                "container_image_digest": "sha256:abc",
+                "container_name": "sglang-omni-hayden-benchmark",
+            }
+        ],
+    )
+    rc, out = _run_validator(out_root, status)
+    assert rc == 1
+    assert "mem-fraction-static" in out
 
 
 def test_validator_fails_on_orphan_cell_with_no_status_row(tmp_path) -> None:

@@ -175,7 +175,12 @@ def check_container(
                 f"Container {name!r} is running image {image_ref!r}, expected {expected_image!r}. "
                 f"Stop/remove the container and restart from the contracted image."
             )
-    report.containers[name] = info
+    # AC-9 evidence preservation: merge into the existing record so any
+    # `launch_command` / `snapshot_path` written by an earlier
+    # ``launch_named_container`` call survives this inspection pass. Round 4
+    # left this as a wholesale `=` assignment, which silently dropped the
+    # launch evidence Codex flagged.
+    report.containers.setdefault(name, {}).update(info)
 
 
 # ----------------------------------------------------------- model probes

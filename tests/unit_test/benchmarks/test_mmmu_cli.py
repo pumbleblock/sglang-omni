@@ -171,6 +171,16 @@ def test_run_metadata_merges_model_revision_from_preflight_json(tmp_path) -> Non
         "containers": {
             "sglang-omni-hayden-benchmark": {
                 "container_image_digest": "sha256:deadbeef",
+                # Round 5 strict fail-fast: preflight_json runs require
+                # launch_command to derive launch policy from evidence.
+                "launch_command": [
+                    "docker", "run", "-d", "--name",
+                    "sglang-omni-hayden-benchmark",
+                    "frankleeeee/sglang-omni:dev",
+                    "sgl-omni", "serve", "--model-path", "/snapshot",
+                    "--mem-fraction-static", "0.9",
+                    "--disable-radix-cache",
+                ],
             },
         },
     }
@@ -340,6 +350,70 @@ def test_launch_policy_mismatch_raises(tmp_path) -> None:
     )
     with _pytest.raises(LaunchPolicyMismatch, match="mem-fraction"):
         _build_run_metadata(cfg)
+
+
+def test_launch_policy_missing_launch_command_with_preflight_raises(tmp_path) -> None:
+    """Round 5 AC-9 fail-fast: when --preflight-json IS supplied but the
+    container record lacks launch_command, the eval must raise rather
+    than silently echo CLI declarations. This closes the Codex Round 4
+    failure mode where check_container overwrote launch_command and the
+    eval silently fell back to CLI values.
+    """
+    import json
+
+    import pytest as _pytest
+
+    from benchmarks.eval.benchmark_omni_mmmu import (
+        LaunchPolicyMismatch,
+        MMMUEvalConfig,
+        _build_run_metadata,
+    )
+
+    # Preflight has a container record (digest, image) but no launch_command.
+    preflight = {
+        "containers": {
+            "sglang-omni-hayden-benchmark": {
+                "container_image_digest": "sha256:abc",
+                "container_image": "frankleeeee/sglang-omni:dev",
+                # launch_command deliberately absent
+            }
+        }
+    }
+    p = tmp_path / "preflight.json"
+    p.write_text(json.dumps(preflight))
+
+    cfg = MMMUEvalConfig(
+        model="m",
+        backend="omni",
+        preflight_json=str(p),  # operator pointed at preflight
+        mem_fraction_static=0.9,
+        prefix_cache_disabled=True,
+    )
+    with _pytest.raises(LaunchPolicyMismatch, match="launch_command"):
+        _build_run_metadata(cfg)
+
+
+def test_launch_policy_missing_launch_command_without_preflight_falls_back(
+    tmp_path,
+) -> None:
+    """Without --preflight-json, the eval still tolerates missing evidence
+    (dev runs). preflight_supplied=False keeps the legacy CLI fallback.
+    """
+    from benchmarks.eval.benchmark_omni_mmmu import (
+        MMMUEvalConfig,
+        _build_run_metadata,
+    )
+
+    cfg = MMMUEvalConfig(
+        model="m",
+        backend="omni",
+        # No preflight_json passed at all.
+        mem_fraction_static=0.9,
+        prefix_cache_disabled=True,
+    )
+    meta = _build_run_metadata(cfg)
+    assert meta["mem_fraction_static_configured"] == 0.9
+    assert meta["prefix_cache_disabled"] is True
 
 
 def test_launch_policy_mismatch_prefix_cache_raises(tmp_path) -> None:

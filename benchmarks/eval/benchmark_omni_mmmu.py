@@ -191,6 +191,8 @@ class LaunchPolicyMismatch(RuntimeError):
 def _derive_launch_policy_from_preflight(
     preflight: dict, container_name: str, declared_mem_fraction: float | None,
     declared_prefix_cache_disabled: bool,
+    *,
+    preflight_supplied: bool = False,
 ) -> tuple[float | None, bool, bool]:
     """Parse the retained `launch_command` and derive evidence-based policy.
 
@@ -204,13 +206,27 @@ def _derive_launch_policy_from_preflight(
       elements come straight from the command flags.
     - When launch_command is present but disagrees with the eval CLI
       declarations, raises ``LaunchPolicyMismatch``.
+    - When ``preflight_supplied=True`` AND the preflight record is missing
+      ``launch_command`` for this container, raises ``LaunchPolicyMismatch``.
+      This closes Codex Round 4's "evidence dropped silently" failure mode:
+      if the operator pointed the eval at a preflight JSON, they get a hard
+      error when that JSON cannot prove the launch policy.
     """
     containers = (preflight.get("containers") or {}) if preflight else {}
     container_record = containers.get(container_name) or {}
     launch_cmd = container_record.get("launch_command")
     if not launch_cmd:
-        # No evidence; the eval's declared values stand but are marked as
-        # claimed-unverified so downstream tooling can flag them.
+        if preflight_supplied:
+            raise LaunchPolicyMismatch(
+                f"--preflight-json was provided but the retained preflight record "
+                f"for container {container_name!r} is missing `launch_command`. "
+                f"The eval cannot derive `prefix_cache_disabled` or "
+                f"`mem_fraction_static_configured` from evidence in this state. "
+                f"Re-run preflight with --launch so the launch command is "
+                f"captured, or omit --preflight-json for an unverified dev run."
+            )
+        # No evidence and no preflight supplied; the eval's declared values
+        # stand but are marked claimed-unverified.
         return declared_mem_fraction, declared_prefix_cache_disabled, True
 
     # Parse flags out of the recorded list. The launch command is a list of
@@ -326,7 +342,9 @@ def _build_run_metadata(
 
     # AC-9 launch policy: derive from preflight's retained launch_command
     # rather than echoing the eval CLI. This raises LaunchPolicyMismatch
-    # when the CLI claims a policy the launch command did not enforce.
+    # when the CLI claims a policy the launch command did not enforce, AND
+    # when --preflight-json was supplied but the retained record dropped
+    # launch_command (the Round 4 evidence-loss failure mode).
     (
         mem_fraction_evidence,
         prefix_cache_disabled_evidence,
@@ -336,6 +354,7 @@ def _build_run_metadata(
         container_name,
         declared_mem_fraction=config.mem_fraction_static,
         declared_prefix_cache_disabled=config.prefix_cache_disabled,
+        preflight_supplied=bool(config.preflight_json),
     )
 
     dataset_revisions = _load_dataset_revisions(config.dataset_revisions)
