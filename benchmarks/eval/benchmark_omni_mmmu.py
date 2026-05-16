@@ -13,11 +13,6 @@ Usage:
     python benchmarks/eval/benchmark_omni_mmmu.py \
         --model qwen3-omni --port 8000 --max-samples 50 --max-concurrency 16
 
-    # With audio (requires speech server)
-    # Note (Yifei, Chenyang): Concurrency=1 only for now since code_predictor and
-    # code2wav modules serialize GPU access, so they run serially even when
-    # concurrency > 1. And, audio output is still slow at this stage.
-
     python benchmarks/eval/benchmark_omni_mmmu.py \
         --model qwen3-omni --port 8000 --max-samples 5 --enable-audio --max-tokens 50
 

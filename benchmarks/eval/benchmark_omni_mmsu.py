@@ -66,12 +66,6 @@ Speed (speed)
 | Qwen3-Omni | modalities=text       | 0.188          | 0.261         | 42.64          | 11.3           | 11.0          | PR #411 [H100, V1-pipeline, full-set, c=8] |
 | Qwen3-Omni | modalities=text+audio | 0.191          | 0.264         | 41.82          | 11.1           | 10.8          | PR #411 [H100, V1-pipeline, full-set, c=8, text-only server] |
 
-Note (Xuesong): text + audio numbers above were measured against a text-only
-Qwen3-Omni server (talker disabled) because a full-pipeline run is blocked on
-Issue #276 (talker is c=1 only at ~2 min/sample). Numbers therefore reflect
-text-only behavior and are near-identical to the `modalities=text` row;
-re-run with talker enabled once #276 lands to get true full-pipeline reference.
-
 Local v1 Pipeline Result (this workspace, 2026-05-01)
 
 This local run used the stage-6 talker prompt on the full 2000-sample
