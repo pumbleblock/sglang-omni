@@ -21,6 +21,7 @@ tests/
     │   ├── test_coordinator.py
     │   ├── test_ipc.py
     │   ├── test_scheduler.py
+    │   ├── test_simple_scheduler_concurrent.py
     │   └── test_stage.py
     ├── qwen3_omni/
     │   ├── test_code2wav.py
@@ -142,7 +143,9 @@ that happened to contain an older version of the test.
   - IPC lifecycle
   - scheduler batching
   - scheduler errors
-  - scheduler concurrency.
+  - scheduler concurrency
+  - scheduler callable contracts, including sync wrappers and callable objects
+    that return awaitables.
 - `unit_test/qwen3_omni/` Qwen3-Omni unit tests:
 
   - public CLI/config behavior

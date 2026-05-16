@@ -10,10 +10,11 @@ from __future__ import annotations
 
 import asyncio
 import collections
+import inspect
 import logging
 import queue as _queue_mod
 import time
-from typing import Any, Callable
+from typing import Any, Awaitable, Callable
 
 from sglang_omni.scheduling.messages import IncomingMessage, OutgoingMessage
 
@@ -49,10 +50,11 @@ class SimpleScheduler:
         self._max_batch_cost = (
             max(int(max_batch_cost), 0) if max_batch_cost is not None else None
         )
-        # max_concurrency > 1 spawns N worker coroutines that dispatch ``compute_fn``
-        # via ``asyncio.to_thread`` so synchronous chunks do not pin the event loop.
-        # Requires ``compute_fn`` to be re-entrant. Mutually exclusive with the
-        # ``batch_compute_fn`` path (set one or the other, not both).
+        # Note (Chenchen, Chenyang):
+        # max_concurrency > 1 spawns N worker coroutines that dispatch compute_fn
+        # via asyncio.to_thread so synchronous chunks do not pin the event loop.
+        # Requires compute_fn to be re-entrant. Mutually exclusive with the
+        # batch_compute_fn path (set one or the other, not both).
         self._max_concurrency = max(int(max_concurrency), 1)
         if self._max_concurrency > 1 and batch_compute_fn is not None:
             raise ValueError(
@@ -158,6 +160,16 @@ class SimpleScheduler:
         for msg, result in zip(batch, results):
             self._emit_result(msg.request_id, result, self.outbox)
 
+    @staticmethod
+    async def _await_result(result: Awaitable[Any]) -> Any:
+        return await result
+
+    def _run_compute_in_thread(self, payload: Any) -> Any:
+        result = self._fn(payload)
+        if inspect.isawaitable(result):
+            result = asyncio.run(self._await_result(result))
+        return result
+
     def start(self) -> None:
         """Run the processing loop (blocks the thread)."""
         self._running = True
@@ -221,16 +233,9 @@ class SimpleScheduler:
                 if msg.type != "new_request":
                     continue
                 try:
-                    if asyncio.iscoroutinefunction(self._fn):
-                        # async compute_fn: run on a worker thread under its own
-                        # event loop so sync chunks inside it do not pin the
-                        # scheduler's event loop.
-                        def _run_async_in_thread() -> Any:
-                            return asyncio.run(self._fn(msg.data))
-
-                        result = await asyncio.to_thread(_run_async_in_thread)
-                    else:
-                        result = await asyncio.to_thread(self._fn, msg.data)
+                    result = await asyncio.to_thread(
+                        self._run_compute_in_thread, msg.data
+                    )
                     self._emit_result(msg.request_id, result, self.outbox)
                 except Exception as exc:
                     logger.exception(

@@ -1,14 +1,15 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Tests for SimpleScheduler ``max_concurrency`` dispatch path.
+"""Tests for SimpleScheduler max_concurrency dispatch path.
 
 Kept in a separate file from test_scheduler.py because that module imports
-``torch`` at top level (for OmniScheduler / StageOutputCache tests). These
+torch at top level (for OmniScheduler / StageOutputCache tests). These
 tests only exercise the SimpleScheduler scheduling layer and have no torch
 dependency.
 """
 
 from __future__ import annotations
 
+import asyncio
 import threading
 from collections.abc import Callable
 from typing import Any
@@ -27,7 +28,12 @@ def run_scheduler(
     before_collect: Callable[[], None] | None = None,
 ) -> list[Any]:
     """Inlined copy of tests.unit_test.pipeline.helpers.run_scheduler to avoid
-    the torch transitive import in helpers.py."""
+    the torch transitive import in helpers.py.
+
+    Note (Chenchen, Chenyang):
+    This is a copy of tests.unit_test.pipeline.helpers.run_scheduler to avoid
+    the torch transitive import in helpers.py.
+    """
     thread = threading.Thread(target=scheduler.start, daemon=True)
     thread.start()
     try:
@@ -134,6 +140,67 @@ def test_max_concurrency_reports_worker_errors() -> None:
     assert all(
         out.type == "error" and isinstance(out.data, RuntimeError) for out in outputs
     )
+
+
+def test_max_concurrency_awaits_coroutine_returned_by_sync_callable() -> None:
+    """Sync wrappers that return coroutines must emit the awaited result."""
+
+    async def compute_async(payload: str) -> str:
+        await asyncio.sleep(0)
+        return payload.upper()
+
+    def compute(payload: str):
+        return compute_async(payload)
+
+    outputs = run_scheduler(
+        SimpleScheduler(compute, max_concurrency=2),
+        [IncomingMessage("req-await", "new_request", "payload")],
+        output_count=1,
+    )
+
+    assert outputs[0].request_id == "req-await"
+    assert outputs[0].type == "result"
+    assert outputs[0].data == "PAYLOAD"
+
+
+def test_max_concurrency_awaits_async_call_object() -> None:
+    """Callable objects with async __call__ must not emit coroutine objects."""
+
+    class Compute:
+        async def __call__(self, payload: str) -> str:
+            await asyncio.sleep(0)
+            return payload.upper()
+
+    outputs = run_scheduler(
+        SimpleScheduler(Compute(), max_concurrency=2),
+        [IncomingMessage("req-call", "new_request", "payload")],
+        output_count=1,
+    )
+
+    assert outputs[0].request_id == "req-call"
+    assert outputs[0].type == "result"
+    assert outputs[0].data == "PAYLOAD"
+
+
+def test_max_concurrency_reports_errors_from_returned_coroutines() -> None:
+    """Returned coroutine exceptions must become per-request error rows."""
+
+    async def compute_async(payload: str) -> str:
+        await asyncio.sleep(0)
+        raise RuntimeError(payload)
+
+    def compute(payload: str):
+        return compute_async(payload)
+
+    outputs = run_scheduler(
+        SimpleScheduler(compute, max_concurrency=2),
+        [IncomingMessage("req-await-error", "new_request", "boom")],
+        output_count=1,
+    )
+
+    assert outputs[0].request_id == "req-await-error"
+    assert outputs[0].type == "error"
+    assert isinstance(outputs[0].data, RuntimeError)
 
 
 def test_max_concurrency_with_batch_fn_is_rejected() -> None:
