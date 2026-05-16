@@ -245,7 +245,8 @@ class SimpleScheduler:
         try:
             await asyncio.gather(bridge_task, *worker_tasks)
         except asyncio.CancelledError:
-            pass
+            # Expected during shutdown/task cancellation; suppress intentionally.
+            logger.debug("SimpleScheduler: _run_workers cancelled during shutdown")
 
     def stop(self) -> None:
         self._running = False
