@@ -72,15 +72,10 @@ class StageGroup:
             raise ValueError(
                 f"StageGroup requires at least one process spec (group={group_name})"
             )
-        self.stage_name = group_name
         self.group_name = group_name
         self.process_specs = list(process_specs)
         self._processes: list[multiprocessing.Process] = []
         self._ready_events: list[multiprocessing.Event] = []
-
-    @property
-    def tp_size(self) -> int:
-        return len(self.process_specs)
 
     @property
     def process_count(self) -> int:

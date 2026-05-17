@@ -24,6 +24,7 @@ from sglang_omni.config.topology import ProcessTopologyPlan
 from sglang_omni.pipeline import Coordinator
 from sglang_omni.pipeline.runtime_config import (
     IpcRuntimeDir,
+    PipelineRuntimePrep,
     build_relay_config,
     prepare_pipeline_runtime,
 )
@@ -285,6 +286,7 @@ class MultiProcessPipelineRunner:
         self._monitor_task: asyncio.Task | None = None
         self._fatal_event: asyncio.Event | None = None
         self._fatal_error: BaseException | None = None
+        self._prep: PipelineRuntimePrep | None = None
         self._started = False
 
     @property
@@ -292,6 +294,14 @@ class MultiProcessPipelineRunner:
         if self._coordinator is None:
             raise RuntimeError("Runner not started")
         return self._coordinator
+
+    @property
+    def prep(self) -> PipelineRuntimePrep:
+        """Return the resolved runtime prep (placement plan, process plan,
+        endpoints, fused stages). Valid only after :meth:`start`."""
+        if self._prep is None:
+            raise RuntimeError("Runner not started")
+        return self._prep
 
     @property
     def stage_control_endpoints(self) -> dict[str, str]:
@@ -314,6 +324,7 @@ class MultiProcessPipelineRunner:
                 self._config,
                 ipc_runtime_dir=self._ipc_runtime_dir,
             )
+            self._prep = prep
             self._ipc_runtime_dir = prep.runtime_dir
             groups = _build_stage_groups(
                 self._config,

@@ -368,6 +368,16 @@ async def _run_launcher_with_fake_runner(
             }
             self.started = False
             self.stopped = False
+            # launcher._run_server reads .prep.placement_plan / .process_plan
+            # after start() to log the resolved topology. Provide empty stubs
+            # that satisfy _placement_log_summary's attribute access.
+            self.prep = SimpleNamespace(
+                placement_plan=SimpleNamespace(gpus={}),
+                process_plan=SimpleNamespace(
+                    groups=(),
+                    tp_stage_to_processes={},
+                ),
+            )
             runner_ref = self
 
         async def start(self, timeout: float) -> None:

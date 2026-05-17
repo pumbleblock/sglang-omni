@@ -213,8 +213,16 @@ async def _run_server(
     # 0. Check port availability before loading models
     port = _find_available_port(host, port)
 
-    placement_plan = build_stage_placement_plan(pipeline_config)
-    process_plan = build_process_topology_plan(pipeline_config, placement_plan)
+    mp_runner = MultiProcessPipelineRunner(pipeline_config)
+    startup_timeout = float(os.environ.get("SGLANG_OMNI_STARTUP_TIMEOUT", "600"))
+    await mp_runner.start(timeout=startup_timeout)
+    coordinator = mp_runner.coordinator
+
+    # Plans are resolved once inside ``mp_runner.start()`` (which applies
+    # stage fusion); read them back from the runner for logging rather than
+    # recomputing on the un-fused config.
+    placement_plan = mp_runner.prep.placement_plan
+    process_plan = mp_runner.prep.process_plan
     gpu_ids = set(placement_plan.gpus)
     placement_summary = _placement_log_summary(
         placement_plan,
@@ -225,11 +233,6 @@ async def _run_server(
         "Resolved placement/topology plan: placement=%s",
         placement_summary,
     )
-
-    mp_runner = MultiProcessPipelineRunner(pipeline_config)
-    startup_timeout = float(os.environ.get("SGLANG_OMNI_STARTUP_TIMEOUT", "600"))
-    await mp_runner.start(timeout=startup_timeout)
-    coordinator = mp_runner.coordinator
     logger.info(
         "Pipeline '%s' started (%d GPU(s))",
         pipeline_config.name,
