@@ -1,42 +1,73 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Resolve declarative stage config into runtime process settings."""
+"""Pipeline runtime preparation and relay config helpers."""
 
 from __future__ import annotations
 
-import inspect
-from typing import Any
+from dataclasses import dataclass
 
+from sglang_omni.config.placement import StagePlacementPlan, build_stage_placement_plan
 from sglang_omni.config.schema import PipelineConfig, StageConfig
-from sglang_omni.utils import import_string
+from sglang_omni.pipeline.endpoints import (
+    IpcRuntimeDir,
+    allocate_endpoints,
+    create_ipc_runtime_dir,
+)
 
 
-def resolve_factory_args(
-    stage_cfg: StageConfig,
-    global_cfg: PipelineConfig,
-) -> dict[str, Any]:
-    """Resolve factory args, injecting model_path and gpu_id when appropriate."""
-    args = dict(stage_cfg.factory_args)
-    stage_overrides = global_cfg.runtime_overrides.get(stage_cfg.name, {})
-    if stage_overrides:
-        args.update(stage_overrides)
-    factory = import_string(stage_cfg.factory)
-    sig = inspect.signature(factory)
+@dataclass(frozen=True)
+class PipelineRuntimePrep:
+    """Prepared stage, endpoint, and placement state for one runner."""
 
-    if "model_path" in sig.parameters and "model_path" not in args:
-        args["model_path"] = global_cfg.model_path
+    stages_cfg: list[StageConfig]
+    name_map: dict[str, str]
+    entry_stage: str
+    endpoints: dict[str, str]
+    placement_plan: StagePlacementPlan
+    runtime_dir: IpcRuntimeDir | None
+    runtime_dir_created_here: bool
 
-    if "gpu_id" in sig.parameters and "gpu_id" not in args:
-        placement = global_cfg.gpu_placement.get(stage_cfg.name)
-        if placement is not None:
-            args["gpu_id"] = placement[0] if isinstance(placement, list) else placement
 
-    return args
+def prepare_pipeline_runtime(
+    config: PipelineConfig,
+    *,
+    ipc_runtime_dir: IpcRuntimeDir | None = None,
+) -> PipelineRuntimePrep:
+    """Prepare fused stages, placement, endpoints, and optional IPC runtime dir."""
+
+    runtime_dir = ipc_runtime_dir
+    created_runtime_dir = None
+    if runtime_dir is None:
+        runtime_dir = create_ipc_runtime_dir(config)
+        created_runtime_dir = runtime_dir
+
+    try:
+        stages_cfg, name_map, entry_stage = config.apply_fusion()
+        placement_plan = build_stage_placement_plan(config, stages_cfg=stages_cfg)
+        endpoints = allocate_endpoints(
+            config,
+            stages=stages_cfg,
+            ipc_base_dir=runtime_dir.path if runtime_dir else None,
+        )
+    except Exception:
+        if created_runtime_dir is not None:
+            created_runtime_dir.close()
+        raise
+
+    return PipelineRuntimePrep(
+        stages_cfg=stages_cfg,
+        name_map=name_map,
+        entry_stage=entry_stage,
+        endpoints=endpoints,
+        placement_plan=placement_plan,
+        runtime_dir=runtime_dir,
+        runtime_dir_created_here=created_runtime_dir is not None,
+    )
 
 
 def build_relay_config(
     stage_cfg: StageConfig,
     global_cfg: PipelineConfig,
-) -> dict[str, Any]:
+) -> dict[str, object]:
     relay_cfg = stage_cfg.relay
     if relay_cfg is not None:
         return {
@@ -77,37 +108,3 @@ def parse_gpu_id(device: str) -> int | None:
     if device.startswith("cuda:"):
         return int(device.split(":", 1)[1])
     raise ValueError(f"Unsupported device string: {device}")
-
-
-def detect_same_gpu_targets(
-    sender_cfg: StageConfig,
-    targets: list[str],
-    *,
-    gpu_placement: dict[str, int | list[int]] | None = None,
-    cfg_map: dict[str, StageConfig] | None = None,
-) -> set[str]:
-    if not gpu_placement or not cfg_map:
-        return set()
-    sender_gpu = primary_gpu(sender_cfg, gpu_placement)
-    if sender_gpu is None:
-        return set()
-    same: set[str] = set()
-    for target_name in targets:
-        receiver_cfg = cfg_map.get(target_name)
-        if receiver_cfg is None:
-            continue
-        receiver_gpu = primary_gpu(receiver_cfg, gpu_placement)
-        if receiver_gpu is not None and receiver_gpu == sender_gpu:
-            same.add(target_name)
-    return same
-
-
-def primary_gpu(
-    stage_cfg: StageConfig,
-    gpu_placement: dict[str, int | list[int]],
-) -> int | None:
-    """Return the primary (rank 0) GPU id for a stage, or None for CPU stages."""
-    raw = gpu_placement.get(stage_cfg.name)
-    if raw is None:
-        return None
-    return raw[0] if isinstance(raw, list) else raw

@@ -124,6 +124,8 @@ stage:
 - merge `factory_args` with `runtime_overrides`
 - inject global values such as `model_path` and `gpu_id` into factory args when
   accepted by the factory
+- apply typed runtime fields from `sglang_omni.config.runtime`
+- build the placement plan from `sglang_omni.config.placement`
 - build relay config from stage placement and relay backend
 - resolve stream targets and same-GPU stream fast paths
 
@@ -132,7 +134,7 @@ A stage group owns one or more OS processes for that logical stage.
 ```text
 pipeline/
 |-- endpoints.py        # IPC runtime dirs and endpoint allocation
-|-- runtime_config.py   # Factory args, relay config, stream target helpers
+|-- runtime_config.py   # Runner prep and relay config helpers
 |-- stage_process.py    # StageProcessSpec and subprocess entrypoint
 |-- stage_group.py      # StageGroup lifecycle for a logical stage
 `-- mp_runner.py        # Cross-stage orchestration and coordinator ownership

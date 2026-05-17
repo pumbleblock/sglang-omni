@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 import pytest
@@ -26,7 +27,8 @@ def noop_factory():
 def _make_config(base_path: Path, *, scheme: str = "ipc") -> PipelineConfig:
     return PipelineConfig(
         model_path="Qwen/Qwen3-Omni-30B-A3B-Instruct",
-        entry_stage="preprocessing",
+        name="same-model",
+        endpoints=EndpointsConfig(scheme=scheme, base_path=str(base_path)),
         stages=[
             StageConfig(
                 name="preprocessing",
@@ -34,7 +36,6 @@ def _make_config(base_path: Path, *, scheme: str = "ipc") -> PipelineConfig:
                 terminal=True,
             )
         ],
-        endpoints=EndpointsConfig(scheme=scheme, base_path=str(base_path)),
     )
 
 
@@ -50,12 +51,12 @@ def test_ipc_runtime_dir_creation_and_close_contracts(tmp_path: Path) -> None:
     assert runtime_a is not None
     assert runtime_b is not None
     assert runtime_a.path != runtime_b.path
+    assert runtime_a.path.exists()
+    assert runtime_b.path.exists()
 
-    runtime_path = runtime_a.path
     runtime_a.close()
     runtime_a.close()
     runtime_b.close()
-    assert not runtime_path.exists()
     assert list(tmp_path.iterdir()) == []
 
 
@@ -92,8 +93,8 @@ async def test_mp_runner_starts_same_model_instances_with_unique_ipc_endpoints(
             != runner_b.coordinator.control_plane.completion_endpoint
         )
         assert (
-            runner_a.stage_endpoints["preprocessing"]
-            != runner_b.stage_endpoints["preprocessing"]
+            runner_a.stage_control_endpoints["preprocessing"]
+            != runner_b.stage_control_endpoints["preprocessing"]
         )
     finally:
         await runner_b.stop()
@@ -120,6 +121,77 @@ async def test_mp_runner_cleans_runtime_dir_on_start_failure(
     with pytest.raises(RuntimeError, match="boom"):
         await runner.start()
 
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.asyncio
+async def test_mp_runner_cleans_spawned_groups_when_later_spawn_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Preserves spawned process cleanup if a later stage group fails to spawn."""
+
+    class FakeProcess:
+        def __init__(self) -> None:
+            self.terminated = False
+            self.killed = False
+            self.join_count = 0
+            self._alive = True
+
+        def is_alive(self) -> bool:
+            return self._alive
+
+        def terminate(self) -> None:
+            self.terminated = True
+            self._alive = False
+
+        def kill(self) -> None:
+            self.killed = True
+            self._alive = False
+
+        def join(self, timeout=None) -> None:
+            del timeout
+            self.join_count += 1
+
+    class SpawnGroup:
+        tp_size = 1
+        leader_endpoint = "ipc://stage.sock"
+
+        def __init__(self, stage_name: str, *, fail_spawn: bool = False) -> None:
+            self.stage_name = stage_name
+            self.fail_spawn = fail_spawn
+            self.process = FakeProcess() if not fail_spawn else None
+
+        @property
+        def processes(self) -> list[FakeProcess]:
+            return [self.process] if self.process is not None else []
+
+        def spawn(self, ctx) -> None:
+            del ctx
+            if self.fail_spawn:
+                raise RuntimeError(f"spawn failed for {self.stage_name}")
+
+        async def wait_ready(self, timeout: float) -> None:
+            del timeout
+
+        def any_dead(self) -> bool:
+            return False
+
+    first_group = SpawnGroup("preprocessing")
+    second_group = SpawnGroup("thinker", fail_spawn=True)
+    monkeypatch.setattr(mp_runner, "Coordinator", FakeCoordinator)
+    monkeypatch.setattr(
+        mp_runner,
+        "_build_stage_groups",
+        lambda *a, **k: [first_group, second_group],
+    )
+
+    runner = mp_runner.MultiProcessPipelineRunner(_make_config(tmp_path))
+    with pytest.raises(RuntimeError, match="spawn failed"):
+        await runner.start()
+
+    assert first_group.process.terminated
+    assert first_group.process.join_count >= 1
     assert list(tmp_path.iterdir()) == []
 
 
@@ -152,7 +224,7 @@ async def test_launcher_stops_runner_when_server_raises(
     class FakeRunner:
         def __init__(self, config: PipelineConfig):
             self.config = config
-            self.stage_endpoints = {"preprocessing": "ipc://stage.sock"}
+            self.stage_control_endpoints = {"preprocessing": "ipc://stage.sock"}
             self.coordinator = object()
 
         async def start(self, timeout: float = 120.0) -> None:
@@ -161,6 +233,9 @@ async def test_launcher_stops_runner_when_server_raises(
         async def stop(self) -> None:
             nonlocal stopped
             stopped = True
+
+        async def wait_failed(self) -> None:
+            await asyncio.Future()
 
     async def fail_serve(self) -> None:
         del self

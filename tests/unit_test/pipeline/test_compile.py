@@ -5,8 +5,8 @@ from __future__ import annotations
 import pytest
 
 from sglang_omni.config.schema import EndpointsConfig, PipelineConfig
-from sglang_omni.pipeline.endpoints import allocate_endpoints
 from sglang_omni.pipeline.mp_runner import _build_stage_groups
+from sglang_omni.pipeline.runtime_config import prepare_pipeline_runtime
 from sglang_omni.pipeline.stage_process import get_stage_process_env
 from tests.unit_test.fixtures.pipeline_fakes import FakeMpContext, fake_factory_path
 from tests.unit_test.pipeline.helpers import stage
@@ -71,18 +71,18 @@ def test_stage_group_specs_wire_routes_overrides_aggregation_and_streams() -> No
         ],
     )
 
-    stages_cfg, name_map, entry_stage = config.apply_fusion()
-    endpoints = allocate_endpoints(config, stages=stages_cfg)
+    prep = prepare_pipeline_runtime(config)
     groups = _build_stage_groups(
         config,
         ctx=FakeMpContext(),
-        stages_cfg=stages_cfg,
-        name_map=name_map,
-        endpoints=endpoints,
+        stages_cfg=prep.stages_cfg,
+        name_map=prep.name_map,
+        endpoints=prep.endpoints,
+        placement_plan=prep.placement_plan,
     )
     spec_map = {group.stage_name: group.leader_spec for group in groups}
 
-    assert entry_stage == "preprocess"
+    assert prep.entry_stage == "preprocess"
     assert spec_map["preprocess"].next_stages == ["thinker", "aggregate"]
     assert spec_map["aggregate"].wait_for == ["preprocess", "thinker"]
     assert spec_map["aggregate"].merge_fn == fake_factory_path("merge_payloads")
@@ -110,15 +110,15 @@ def test_mp_runner_preserves_tp_rank_and_visible_device_contracts() -> None:
             )
         ],
     )
-    stages_cfg, name_map, _ = config.apply_fusion()
-    endpoints = allocate_endpoints(config, stages=stages_cfg)
+    prep = prepare_pipeline_runtime(config)
 
     group = _build_stage_groups(
         config,
         ctx=FakeMpContext(),
-        stages_cfg=stages_cfg,
-        name_map=name_map,
-        endpoints=endpoints,
+        stages_cfg=prep.stages_cfg,
+        name_map=prep.name_map,
+        endpoints=prep.endpoints,
+        placement_plan=prep.placement_plan,
     )[0]
     leader, follower = group.specs
     env = get_stage_process_env(follower, env={"CUDA_VISIBLE_DEVICES": "4,5,6,7"})
@@ -145,18 +145,19 @@ def test_mp_runner_preserves_cpu_stage_without_gpu_assignment() -> None:
             )
         ],
     )
-    stages_cfg, name_map, _ = config.apply_fusion()
-    endpoints = allocate_endpoints(config, stages=stages_cfg)
+    prep = prepare_pipeline_runtime(config)
 
     group = _build_stage_groups(
         config,
         ctx=FakeMpContext(),
-        stages_cfg=stages_cfg,
-        name_map=name_map,
-        endpoints=endpoints,
+        stages_cfg=prep.stages_cfg,
+        name_map=prep.name_map,
+        endpoints=prep.endpoints,
+        placement_plan=prep.placement_plan,
     )[0]
 
     assert group.leader_spec.gpu_id is None
+    assert group.leader_spec.relay_config["gpu_id"] is None
     assert "gpu_id" not in group.leader_spec.factory_args
 
 
@@ -167,14 +168,14 @@ def test_mp_runner_rejects_tp_without_explicit_gpu_placement() -> None:
         endpoints=EndpointsConfig(scheme="tcp"),
         stages=[stage("thinker", tp_size=2, terminal=True)],
     )
-    stages_cfg, name_map, _ = config.apply_fusion()
-    endpoints = allocate_endpoints(config, stages=stages_cfg)
+    prep = prepare_pipeline_runtime(config)
 
-    with pytest.raises(ValueError, match="requires explicit gpu placement"):
+    with pytest.raises(ValueError, match="requires GPU placement"):
         _build_stage_groups(
             config,
             ctx=FakeMpContext(),
-            stages_cfg=stages_cfg,
-            name_map=name_map,
-            endpoints=endpoints,
+            stages_cfg=prep.stages_cfg,
+            name_map=prep.name_map,
+            endpoints=prep.endpoints,
+            placement_plan=prep.placement_plan,
         )
