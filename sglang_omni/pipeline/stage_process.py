@@ -87,31 +87,97 @@ class StageProcessSpec:
         return self.role == "follower"
 
 
+@dataclass
+class StageWorkerProcessSpec:
+    """Everything one OS process needs to run one or more stages."""
+
+    process_name: str
+    stage_specs: list[StageProcessSpec]
+    gpu_id: int | None = None
+
+
 def stage_process_main(
-    spec: StageProcessSpec,
+    spec: StageProcessSpec | StageWorkerProcessSpec,
     ready_event: multiprocessing.Event,
 ) -> None:
-    """Subprocess entrypoint: construct a Stage from *spec* and run it."""
+    """Subprocess entrypoint: construct stage(s) from *spec* and run them."""
     logging.basicConfig(level=logging.INFO, stream=sys.stdout)
-    tp_suffix = f"-tp{spec.tp_rank}" if spec.tp_size > 1 else ""
-    log = logging.getLogger(f"stage.{spec.stage_name}{tp_suffix}")
+    process_spec = _normalize_worker_process_spec(spec)
+    log = logging.getLogger(f"stage_process.{process_spec.process_name}")
 
     try:
-        _prepare_cuda_environment(spec, log)
-        _run_stage(spec, ready_event, log)
+        for stage_spec in process_spec.stage_specs:
+            _prepare_cuda_environment(stage_spec, log)
+        _run_process(process_spec, ready_event, log)
     except Exception:
         import traceback
 
-        log.error("Stage process failed:\n%s", traceback.format_exc())
+        log.error(
+            "Stage process %s failed:\n%s",
+            process_spec.process_name,
+            traceback.format_exc(),
+        )
         sys.exit(1)
 
 
-def _run_stage(
-    spec: StageProcessSpec,
+def _normalize_worker_process_spec(
+    spec: StageProcessSpec | StageWorkerProcessSpec,
+) -> StageWorkerProcessSpec:
+    if isinstance(spec, StageWorkerProcessSpec):
+        if not spec.stage_specs:
+            raise ValueError(
+                f"Process {spec.process_name!r} requires at least one stage"
+            )
+        return spec
+    return StageWorkerProcessSpec(
+        process_name=_default_process_name(spec),
+        stage_specs=[spec],
+        gpu_id=spec.gpu_id,
+    )
+
+
+def _default_process_name(spec: StageProcessSpec) -> str:
+    if spec.tp_size > 1:
+        return f"{spec.stage_name}_tp{spec.tp_rank}"
+    return spec.stage_name
+
+
+def _run_process(
+    spec: StageWorkerProcessSpec,
     ready_event: multiprocessing.Event,
     log: logging.Logger,
 ) -> None:
+    stages = [_construct_stage(stage_spec, log) for stage_spec in spec.stage_specs]
 
+    async def _start_and_run():
+        tasks: list[asyncio.Task] = []
+        try:
+            for stage in stages:
+                await stage.start()
+            log.info(
+                "Process %s ready with stages=%s",
+                spec.process_name,
+                [stage.name for stage in stages],
+            )
+            ready_event.set()
+            tasks = [asyncio.create_task(stage.run()) for stage in stages]
+            await asyncio.gather(*tasks)
+        finally:
+            for task in tasks:
+                task.cancel()
+            if tasks:
+                await asyncio.gather(*tasks, return_exceptions=True)
+            for stage in stages:
+                if getattr(stage, "_running", False):
+                    await stage.stop()
+
+    asyncio.run(_start_and_run())
+
+
+def _construct_stage(
+    spec: StageProcessSpec,
+    log: logging.Logger,
+) -> Stage:
     gpu_id = spec.relay_config.get("gpu_id")
     if gpu_id is None:
         gpu_id = spec.factory_args.get("gpu_id")
@@ -204,14 +270,7 @@ def _run_stage(
     if spec.is_stream_receiver:
         stage._stream_queue = StreamQueue(max_pending=4096)
 
-    # --- Run ---
-    async def _start_and_run():
-        await stage.start()
-        log.info("Stage %s (tp_rank=%d) ready", spec.stage_name, spec.tp_rank)
-        ready_event.set()
-        await stage.run()
-
-    asyncio.run(_start_and_run())
+    return stage
 
 
 def _construct_scheduler(

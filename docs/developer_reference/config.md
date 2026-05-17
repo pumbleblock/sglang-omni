@@ -60,11 +60,12 @@ stages = [
 | --- | --- | --- | --- |
 | `name` | `str` | required | Unique stage identifier. |
 | `factory` | `str` | required | Dotted import path to the stage factory. |
-| `factory_args` | `dict[str, Any]` | `{}` | Arguments forwarded to the factory. The compiler may inject `model_path` and `gpu_id` if the factory accepts them and they are not already set. |
+| `factory_args` | `dict[str, Any]` | `{}` | Arguments forwarded to the factory. Runtime prep may inject `model_path` and `gpu_id` if the factory accepts them and they are not already set. |
 | `next` | `str`, `list[str]`, or `None` | `None` | Static downstream stage or stages for normal result routing. |
 | `terminal` | `bool` | `False` | Marks a stage as terminal; terminal results are sent to the coordinator. |
 | `gpu` | `int`, `list[int]`, or `None` | `None` | GPU id for the stage. `None` means CPU placement. A list is used for tensor parallel ranks. |
 | `tp_size` | `int` | `1` | Number of tensor-parallel ranks. Must match `len(gpu)` when `gpu` is a list. |
+| `process` | `str` or `None` | `None` | Optional OS process group for non-TP stages. If any non-TP stage sets it, all non-TP stages must set it. TP stages must leave it unset because rank processes are derived automatically. |
 | `wait_for` | `list[str]` or `None` | `None` | Upstream stages required before this stage can execute a request. |
 | `merge_fn` | `str` or `None` | `None` | Dotted import path to the fan-in merge function. Required when `wait_for` is set. |
 | `stream_to` | `list[str]` | `[]` | Streaming targets for chunks such as hidden states or codec codes. This is parallel to normal result routing. |
@@ -84,7 +85,7 @@ Derived from stages:
 - `terminal_stages`: computed from stages with `terminal=True`
 - `gpu_placement`: computed from stages with `gpu` set
 - relay device: explicit `StageConfig.relay.device` when present; otherwise
-  inferred by the compiler from `gpu` and `relay_backend`
+  inferred by runtime prep from `gpu` and `relay_backend`
 
 ## `PipelineConfig` Reference
 
@@ -96,7 +97,7 @@ Derived from stages:
 | `entry_stage` | `str` or `None` | first stage | Optional override for the stage that receives new requests. |
 | `relay_backend` | one of `shm`, `nccl`, `nixl`, `mooncake` | `shm` | Global relay backend used when creating per-stage relays. |
 | `fused_stages` | `list[list[str]]` | `[]` | Validated as adjacent stage groups, but fusion is not implemented yet. |
-| `runtime_overrides` | `dict[str, dict[str, Any]]` | `{}` | Per-stage factory argument overrides applied by the compiler. |
+| `runtime_overrides` | `dict[str, dict[str, Any]]` | `{}` | Per-stage factory argument overrides applied during runtime prep. |
 | `endpoints` | `EndpointsConfig` | IPC defaults | Endpoint allocation settings: `scheme`, `base_path`, and `base_port`. |
 | `completion_endpoint` | `str` or `None` | `None` | Optional explicit coordinator completion endpoint. |
 | `abort_endpoint` | `str` or `None` | `None` | Optional explicit coordinator abort broadcast endpoint. |
@@ -111,9 +112,9 @@ Derived values are computed from stages, not manually maintained:
 `RelayConfig` is the per-stage data-transfer override. It currently contains
 `slot_size_mb`, `credits`, `rank`, `world_size`, and `device`.
 
-## Compiler and Runners
+## Runtime Prep and Runner
 
-The compiler prepares runtime wiring from a pipeline config:
+Runtime prep builds the resolved state used by the runner:
 
 - validate stage names and static topology
 - compute the entry stage and terminal stages
@@ -125,23 +126,32 @@ The compiler prepares runtime wiring from a pipeline config:
 - build relay config from stage placement and relay backend
 - wire stream targets and same-GPU stream fast paths
 
-Single-process serving uses `compile_pipeline_core()` to build a coordinator and
-in-process `Stage` objects.
+Serving uses `MultiProcessPipelineRunner` for both single-process and
+multi-process topologies. Runtime prep first resolves GPU placement, then
+process topology:
 
-Multi-process serving uses `MultiProcessPipelineRunner`. It prepares the same
-runtime state, then builds one `StageGroup` per logical stage. A stage group
-owns one or more OS processes for that logical stage.
+- if no stage declares `process`, legacy defaults are preserved;
+- legacy single-process placement becomes one process group containing all
+  non-TP stages;
+- legacy multi-process placement becomes one process group per non-TP stage;
+- explicit `stage.process` groups non-TP stages declaratively.
+
+A process group may contain CPU stages and stages on at most one GPU. Multiple
+process groups may share the same GPU only when GPU-stage memory budgets are
+explicit and fit the configured placement limit.
 
 ```text
 pipeline/
 |-- stage_process.py    # StageProcessSpec and subprocess entrypoint
-|-- stage_group.py      # StageGroup lifecycle for a logical stage
+|-- stage_group.py      # StageGroup lifecycle for topology process groups
+|-- runtime_config.py   # endpoint/runtime-dir/placement prep
 `-- mp_runner.py        # Cross-stage orchestration and coordinator ownership
 ```
 
-The child process does not recompile the pipeline. The main process builds a
-fully resolved, picklable `StageProcessSpec`; the child imports the stage
-factory, builds the scheduler, constructs the `Stage`, signals ready, and runs.
+The child process does not recompile the pipeline. The main process builds
+fully resolved, picklable stage/process specs; the child imports stage
+factories, builds schedulers, constructs `Stage` objects, signals ready, and
+runs one or more non-TP stages in the same event loop.
 
 ## Tensor Parallelism
 
@@ -157,9 +167,10 @@ StageConfig(
 )
 ```
 
-For `tp_size > 1`, `StageGroup` spawns one process per TP rank. Each process
-runs the stage scheduler and model worker with a different `tp_rank` and GPU.
-NCCL collectives inside model forward keep TP ranks in lockstep.
+For `tp_size > 1`, the runner derives one process per TP rank. Each process runs
+the stage scheduler and model worker with a different `tp_rank` and GPU. NCCL
+collectives inside model forward keep TP ranks in lockstep. TP stages must not
+set `process`; they do not share rank processes with other logical stages.
 
 Only rank 0 owns external stage IO:
 

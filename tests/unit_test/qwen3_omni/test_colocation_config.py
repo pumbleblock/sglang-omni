@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 
-from sglang_omni.config import build_stage_placement_plan
+from sglang_omni.config import build_process_topology_plan, build_stage_placement_plan
 from sglang_omni.models.qwen3_omni.config import (
     Qwen3OmniSpeechColocatedPipelineConfig,
     Qwen3OmniSpeechPipelineConfig,
@@ -45,10 +45,12 @@ def test_default_speech_topology_stays_disaggregated() -> None:
     config = Qwen3OmniSpeechPipelineConfig(model_path="dummy")
 
     assert len(config.stages) == 8
-    assert config.process.mode == "auto"
     assert _stage(config, "thinker").gpu == 0
     assert _stage(config, "talker_ar").gpu == 1
     assert _stage(config, "code2wav").gpu == 1
+    assert _stage(config, "thinker").process == "thinker"
+    assert _stage(config, "talker_ar").process == "talker"
+    assert _stage(config, "code2wav").process == "talker"
     assert "code_predictor" not in {stage.name for stage in config.stages}
 
 
@@ -56,7 +58,6 @@ def test_colocated_topology_is_opt_in_and_uses_one_gpu() -> None:
     config = Qwen3OmniSpeechColocatedPipelineConfig(model_path="dummy")
 
     assert Variants["speech-colocated"] is Qwen3OmniSpeechColocatedPipelineConfig
-    assert config.process.mode == "multi"
     for stage_name in (
         "image_encoder",
         "audio_encoder",
@@ -65,6 +66,7 @@ def test_colocated_topology_is_opt_in_and_uses_one_gpu() -> None:
         "code2wav",
     ):
         assert _stage(config, stage_name).gpu == 0
+        assert _stage(config, stage_name).process == stage_name
 
 
 def test_colocated_config_passes_with_explicit_budgets_without_ar_mem_fraction() -> (
@@ -74,9 +76,19 @@ def test_colocated_config_passes_with_explicit_budgets_without_ar_mem_fraction()
     _set_colocated_runtime(config, include_mem_fraction=False)
 
     plan = build_stage_placement_plan(config)
+    topology = build_process_topology_plan(config, plan)
 
-    assert plan.requires_multi_process is True
     assert plan.gpus[0].total_gpu_memory_fraction == pytest.approx(0.94)
+    assert [group.name for group in topology.groups] == [
+        "preprocessing",
+        "image_encoder",
+        "audio_encoder",
+        "mm_aggregate",
+        "thinker",
+        "decode",
+        "talker_ar",
+        "code2wav",
+    ]
 
 
 def test_colocated_config_marks_same_gpu_stream_targets() -> None:
