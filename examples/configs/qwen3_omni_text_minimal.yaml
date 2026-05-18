@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# Qwen3-Omni text-minimal pipeline preset.
+#
+# Compiles the default 6-stage Qwen3OmniPipelineConfig down to 3 stages:
+# preprocessing -> thinker -> decode. The image_encoder, audio_encoder,
+# and mm_aggregate stages are pruned at config-compile time by the
+# framework's `enabled_stages` whitelist (RFC #462). `thinker` and
+# `decode` are auto-included via their `required=True` declarations;
+# `preprocessing`'s `next_fallback` rewires the DAG to bypass the
+# multimodal stages.
+#
+# Use this preset for pure-text workloads where image/audio inputs are
+# guaranteed absent. Users sending media to a server started with this
+# preset will get a clear pipeline error (no encoder stage to handle it).
+
+config_cls: Qwen3OmniPipelineConfig
+name: qwen3-omni-text-minimal
+model_path: Qwen/Qwen3-Omni-30B-A3B-Instruct
+relay_backend: shm
+
+enabled_stages:
+  - preprocessing
+  - decode
