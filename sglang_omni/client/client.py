@@ -399,6 +399,10 @@ class Client:
 
 
 def _extract_inputs(request: GenerateRequest) -> Any:
+    hypno_inputs = request.metadata.get("hypno_inputs")
+    if hypno_inputs is not None:
+        return hypno_inputs
+
     choices = [
         request.prompt is not None,
         request.prompt_token_ids is not None,
@@ -407,7 +411,7 @@ def _extract_inputs(request: GenerateRequest) -> Any:
     if sum(choices) != 1:
         raise ValueError(
             "GenerateRequest requires exactly one input: "
-            "prompt, prompt_token_ids, or messages."
+            "prompt, prompt_token_ids, messages, or metadata['hypno_inputs']."
         )
     if request.prompt is not None:
         return request.prompt

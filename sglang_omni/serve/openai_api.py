@@ -3,7 +3,8 @@
 
 Provides the following endpoints:
 - POST /v1/chat/completions  — Text (+ audio) chat completions
-- POST /v1/audio/speech      — Text-to-speech synthesis
+- POST /v1/audio/speech           — Text-to-speech synthesis
+- POST /v1/fish/generate_semantic — Fish S2 CB0 semantic tokens (Hypno / GRPO)
 - GET  /v1/models            — List available models
 - GET  /v1/fs/list           — Browse filesystem directories
 - GET  /v1/fs/file           — Download a file
@@ -69,6 +70,7 @@ def create_app(
     client: Client,
     *,
     model_name: str | None = None,
+    model_path: str | None = None,
     enable_realtime: bool = False,
 ) -> FastAPI:
     """Create a FastAPI application with OpenAI-compatible endpoints.
@@ -95,6 +97,7 @@ def create_app(
     # Store references in app state for access from route handlers
     app.state.client = client
     app.state.model_name = model_name or "sglang-omni"
+    app.state.model_path = model_path
     app.state.realtime_enabled = enable_realtime
 
     # Register all routes
@@ -102,6 +105,9 @@ def create_app(
     _register_models(app)
     _register_chat_completions(app)
     _register_speech(app)
+    from sglang_omni.serve.fish_semantic_api import register_fish_semantic_routes
+
+    register_fish_semantic_routes(app)
     if enable_realtime:
         _register_realtime(app)
 

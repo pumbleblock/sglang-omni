@@ -1,0 +1,22 @@
+# Fish S2 semantic-only: preprocessing → tts_engine (no vocoder).
+# Use for Hypno GRPO / training clients that need CB0 token IDs, not WAV.
+config_cls: S2ProPipelineConfig
+model_path: fishaudio/s2-pro
+relay_backend: shm
+stages:
+  - name: preprocessing
+    process: pipeline
+    factory: sglang_omni.models.fishaudio_s2_pro.stages.create_preprocessing_executor
+    next: tts_engine
+  - name: tts_engine
+    process: pipeline
+    factory: sglang_omni.models.fishaudio_s2_pro.stages.create_sglang_tts_engine_executor
+    factory_args:
+      device: cuda:0
+      max_new_tokens: 2048
+      server_args_overrides:
+        mem_fraction_static: 0.78
+        max_running_requests: 16
+        disable_cuda_graph: true
+    gpu: 0
+    terminal: true

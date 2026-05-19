@@ -599,11 +599,9 @@ class ServerHandle:
 
 def launch_server(cmd_template: str, *, port: int, model: str,
                   gpus_csv: str, log_path: Path, repo_root: Path = Path("."),
-                  server_extra: str = "",
                   env_extra: dict | None = None) -> ServerHandle:
-    cmd = " ".join(part for part in (cmd_template, server_extra) if part)
-    cmd = cmd.format(port=port, model=model, gpus=gpus_csv,
-                     repo_root=str(repo_root))
+    cmd = cmd_template.format(port=port, model=model, gpus=gpus_csv,
+                              repo_root=str(repo_root))
     env = dict(os.environ)
     if env_extra:
         env.update(env_extra)
@@ -700,7 +698,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         gpu_pool = [int(s.strip()) for s in args.gpu_pool.split(",") if s.strip()]
         print(f"gpu_pool: {gpu_pool}")
     for row in selected:
-        row_state = _run_one_row(row, py, root, out, rounds, smoke, cfg, hw,
+        row_state = _run_one_row(row, py, root, out, rounds, smoke, cfg,
                                  gpu_pool=gpu_pool)
         if row_state["status"] == "ok" and smoke is None:
             row_state["edit"] = _try_edit_inplace(
@@ -753,7 +751,7 @@ def cmd_run(args: argparse.Namespace) -> int:
 
 
 def _run_one_row(row: dict, py: str, root: Path, out_root: Path,
-                 rounds: int, smoke: int | None, cfg: dict, hw: str,
+                 rounds: int, smoke: int | None, cfg: dict,
                  gpu_pool: list[int] | None = None) -> dict:
     row_id = row["id"]
     row_dir = out_root / row_id
@@ -799,7 +797,6 @@ def _run_one_row(row: dict, py: str, root: Path, out_root: Path,
         round_dir = row_dir / f"round_{k}"
         round_dir.mkdir(parents=True, exist_ok=True)
         rstate = _run_one_round(row, py, root, round_dir, gpus_csv, smoke, cfg,
-                                hw,
                                 asr_device=asr_device)
         rounds_state.append(rstate)
         if rstate["status"] != "ok":
@@ -835,7 +832,7 @@ def _run_one_row(row: dict, py: str, root: Path, out_root: Path,
 
 
 def _run_one_round(row: dict, py: str, root: Path, round_dir: Path,
-                   gpus_csv: str, smoke: int | None, cfg: dict, hw: str, *,
+                   gpus_csv: str, smoke: int | None, cfg: dict, *,
                    asr_device: str = "cpu") -> dict:
     port = free_port()
     server_log = round_dir / "server.log"
@@ -844,14 +841,13 @@ def _run_one_round(row: dict, py: str, root: Path, round_dir: Path,
     out_dir.mkdir(exist_ok=True)
 
     server_cmd_tmpl = row["server"]
-    server_extra = (row.get("server_extra_by_hardware") or {}).get(hw, "")
     model_id = row.get("hf_model_id") or cfg.get("hf_model_id", "")
 
     print(f"  [{round_dir.name}] launching server (port={port}) ...", flush=True)
     handle = launch_server(
         server_cmd_tmpl,
         port=port, model=model_id, gpus_csv=gpus_csv, log_path=server_log,
-        repo_root=root, server_extra=server_extra,
+        repo_root=root,
     )
     try:
         health = row.get("server_health", "http://localhost:{port}/health").format(port=port)

@@ -104,6 +104,29 @@ def create_preprocessing_executor(
     def _preprocess(payload: StagePayload) -> StagePayload:
         inputs = payload.request.inputs or {}
         params = payload.request.params or {}
+        if isinstance(inputs, dict) and inputs.get("hypno_prebuilt"):
+            state = S2ProState(
+                input_ids=list(inputs["input_ids"]),
+                vq_mask_tokens=inputs.get("vq_mask_tokens"),
+                vq_parts=inputs.get("vq_parts"),
+                num_codebooks=int(inputs.get("num_codebooks", 10)),
+                codebook_size=int(inputs.get("codebook_size", 4096)),
+                max_new_tokens=int(
+                    params.get("max_new_tokens", inputs.get("max_new_tokens", 1024))
+                ),
+                temperature=float(
+                    params.get("temperature", inputs.get("temperature", 0.8))
+                ),
+                top_p=float(params.get("top_p", inputs.get("top_p", 0.8))),
+                top_k=int(params.get("top_k", inputs.get("top_k", 30))),
+                repetition_penalty=float(
+                    params.get(
+                        "repetition_penalty", inputs.get("repetition_penalty", 1.1)
+                    )
+                ),
+            )
+            return store_state(payload, state)
+
         if isinstance(inputs, str):
             inputs = {"text": inputs}
 
