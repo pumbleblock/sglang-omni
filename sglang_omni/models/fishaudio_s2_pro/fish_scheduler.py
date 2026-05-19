@@ -126,9 +126,7 @@ class FishBatchPlanner:
                 active_chunked_req, chunked=True
             )
             if active_chunked_req.req_pool_idx is not None:
-                self.prefill_manager.req_to_token_pool.free(
-                    active_chunked_req.req_pool_idx
-                )
+                self.prefill_manager.req_to_token_pool.free(active_chunked_req)
 
         if self.last_batch is None:
             return
