@@ -66,14 +66,15 @@ def build_sglang_tts_request(
     vq_mask_tokens = state.vq_mask_tokens
     if vq_mask_tokens is not None:
         if isinstance(vq_mask_tokens, torch.Tensor):
-            vq_mask_tokens = vq_mask_tokens.detach().clone().to(dtype=torch.bool)
+            # HYPNO_PATCH_REQ_BUILDER_CLONE
+            vq_mask_tokens = vq_mask_tokens.detach().to(dtype=torch.bool)
         else:
             vq_mask_tokens = torch.as_tensor(vq_mask_tokens, dtype=torch.bool)
 
     vq_parts = state.vq_parts
     if vq_parts is not None:
         vq_parts = [
-            p.detach().clone() if isinstance(p, torch.Tensor) else torch.as_tensor(p)
+            p.detach() if isinstance(p, torch.Tensor) else torch.as_tensor(p)  # HYPNO_PATCH_REQ_BUILDER_CLONE
             for p in vq_parts
         ]
 

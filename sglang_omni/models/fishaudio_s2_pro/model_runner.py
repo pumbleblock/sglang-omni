@@ -23,7 +23,8 @@ def collect_s2pro_step_outputs(
     if batch_size == 0:
         return
 
-    result.next_token_ids = output_semantic_ids[:batch_size].clone()
+    # HYPNO_PATCH_MEMCPY: detach next ids (model buffer overwritten next step)
+    result.next_token_ids = output_semantic_ids[:batch_size].detach()
     semantic_tokens = output_semantic_ids[:batch_size].tolist()
 
     for row_idx, sched_req in enumerate(requests):
@@ -35,8 +36,19 @@ def collect_s2pro_step_outputs(
         if semantic_token == im_end_token_id:
             continue
 
-        codes = output_codes[row_idx].unsqueeze(-1).clone()
-        data.last_codebook_values = codes[1:, 0].clone()
+        row_codes = output_codes[row_idx]
+        last_cb = row_codes[1:]
+        prev_last = data.last_codebook_values
+        if (
+            prev_last is None
+            or not isinstance(prev_last, torch.Tensor)
+            or prev_last.shape != last_cb.shape
+            or prev_last.device != last_cb.device
+        ):
+            data.last_codebook_values = last_cb.clone()
+        else:
+            prev_last.copy_(last_cb)
+        codes = row_codes.unsqueeze(-1).clone()
         data.previous_semantic_tokens.append(semantic_token)
         if rep_history_len is not None:
             _append_semantic_history(
@@ -61,7 +73,8 @@ def _append_semantic_history(data: Any, token: torch.Tensor, history_len: int) -
     if count < history_len:
         history[count].copy_(token)
     else:
-        history[:-1].copy_(history[1:].clone())
+        # HYPNO_PATCH_MEMCPY: roll rep-history without clone temp buffer
+        history.copy_(torch.roll(history, shifts=-1, dims=0))
         history[-1].copy_(token)
     data.semantic_history_count = count + 1
 
@@ -99,12 +112,16 @@ class FishS2ProModelRunner(ModelRunner):
             last_codes = data.last_codebook_values
             if last_codes is None:
                 continue
-            self.model._vq_codes[row_idx].copy_(
-                last_codes.to(
-                    device=self.model._vq_codes.device,
-                    dtype=self.model._vq_codes.dtype,
+            dst = self.model._vq_codes[row_idx]
+            if isinstance(last_codes, torch.Tensor) and last_codes.device == dst.device and last_codes.dtype == dst.dtype:
+                dst.copy_(last_codes)
+            else:
+                dst.copy_(
+                    last_codes.to(
+                        device=dst.device,
+                        dtype=dst.dtype,
+                    )
                 )
-            )
         return None
 
     def post_prefill(self, result, forward_batch, schedule_batch, requests):
@@ -130,12 +147,16 @@ class FishS2ProModelRunner(ModelRunner):
         history_len = self.model._rep_history_len
         history = data.semantic_history_tokens
         if history is not None:
-            self.model._prev_tokens[row_idx].copy_(
-                history.to(
-                    device=self.model._prev_tokens.device,
-                    dtype=self.model._prev_tokens.dtype,
+            dst = self.model._prev_tokens[row_idx]
+            if history.device == dst.device and history.dtype == dst.dtype:
+                dst.copy_(history)
+            else:
+                dst.copy_(
+                    history.to(
+                        device=dst.device,
+                        dtype=dst.dtype,
+                    )
                 )
-            )
             self.model._prev_token_count[row_idx] = min(
                 int(data.semantic_history_count), history_len
             )
