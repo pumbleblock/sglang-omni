@@ -31,6 +31,38 @@ from sglang_omni.utils.checkpoint import resolve_checkpoint as _resolve_checkpoi
 logger = logging.getLogger(__name__)
 
 
+def _resolve_s2pro_torch_compile_mode() -> str:
+    """Prefer fast-init compile by default; opt into slow max-autotune via env.
+
+    ``max-autotune-no-cudagraphs`` can take many minutes on cold start. Default to
+    ``reduce-overhead`` so server bring-up stays short; set
+    ``SGLANG_TORCH_COMPILE_MODE=max-autotune-no-cudagraphs`` when chasing peak
+    steady-state tok/s after a warm inductor cache.
+    """
+    return os.environ.get("SGLANG_TORCH_COMPILE_MODE", "reduce-overhead")
+
+
+def _ensure_s2pro_torch_inductor_cache() -> str | None:
+    """Pin a durable Inductor cache so restarts skip most cold compile work."""
+    cache_dir = os.environ.get("TORCHINDUCTOR_CACHE_DIR", "").strip()
+    if not cache_dir:
+        # Prefer Hypno state root when present; else fall back under /tmp.
+        for candidate in (
+            "/content/state/cache/torchinductor_s2pro",
+            "/workspace/state/cache/torchinductor_s2pro",
+            "/tmp/torchinductor_s2pro",
+        ):
+            parent = os.path.dirname(candidate)
+            if os.path.isdir(parent) or candidate.startswith("/tmp/"):
+                cache_dir = candidate
+                break
+    if not cache_dir:
+        return None
+    os.makedirs(cache_dir, exist_ok=True)
+    os.environ["TORCHINDUCTOR_CACHE_DIR"] = cache_dir
+    return cache_dir
+
+
 def _compile_s2pro_codebook_decoder(model: Any, *, max_batch_size: int) -> None:
     """Compile Fast AR decoder layers while leaving sampling and loop control eager."""
     from sglang.srt.model_executor.cuda_graph_runner import set_torch_compile_config
@@ -39,13 +71,13 @@ def _compile_s2pro_codebook_decoder(model: Any, *, max_batch_size: int) -> None:
         raise ValueError("max_batch_size must be >= 1")
 
     set_torch_compile_config()
-    compile_mode = os.environ.get(
-        "SGLANG_TORCH_COMPILE_MODE",
-        "max-autotune-no-cudagraphs",
-    )
+    compile_mode = _resolve_s2pro_torch_compile_mode()
+    cache_dir = _ensure_s2pro_torch_inductor_cache()
     audio_decoder = model._audio_decoder
+    # torch.compile is lazy: this only wraps callables. Real compile cost hits
+    # on the first forward per shape — callers should warm once with bs=1..max.
     compiled_forward_kvcached_layers = [
-        torch.compile(layer.forward_kvcached, mode=compile_mode)
+        torch.compile(layer.forward_kvcached, mode=compile_mode, fullgraph=False)
         for layer in audio_decoder.layers
     ]
     audio_decoder.set_compiled_forward_kvcached_layers(
@@ -53,10 +85,13 @@ def _compile_s2pro_codebook_decoder(model: Any, *, max_batch_size: int) -> None:
         max_batch_size=max_batch_size,
     )
     logger.info(
-        "Compiled %d Fast AR decoder layers (mode=%s, max_batch_size=%d)",
+        "Wrapped %d Fast AR decoder layers with torch.compile "
+        "(mode=%s, max_batch_size=%d, inductor_cache=%s). "
+        "Cold compile runs on first forward; cache reuse cuts later inits.",
         len(compiled_forward_kvcached_layers),
         compile_mode,
         max_batch_size,
+        cache_dir or "(unset)",
     )
 
 

@@ -282,7 +282,7 @@ def test_s2pro_compile_helper_targets_forward_kvcached(
     assert getattr(target, "__self__", None) is audio_decoder.layers[0]
     assert getattr(target, "__name__", "") == "forward_kvcached"
     assert mode == "reduce-overhead"
-    assert kwargs == {}
+    assert kwargs == {"fullgraph": False}
     assert audio_decoder._compiled_forward_kvcached_layers == ["compiled-1"]
     assert audio_decoder._compiled_forward_kvcached_max_bs == 2
 
